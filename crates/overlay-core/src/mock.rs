@@ -468,6 +468,7 @@ impl MockConnector {
                     },
                 ],
                 track_path: Some(TRACK_PATH.to_vec()),
+                track_metadata: None,
             },
             player: PlayerState {
                 speed_ms: Some(speed),

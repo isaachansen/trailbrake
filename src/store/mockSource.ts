@@ -167,7 +167,10 @@ export function startBrowserMock(target: TelemetryStore = store): () => void {
 
   const slowTimer = window.setInterval(() => {
     const t = (performance.now() - start) / 1000;
+    const pct = (t % LAP_SECONDS) / LAP_SECONDS;
     const delta = 0.4 * Math.sin(t * 0.7);
+    const corner = Math.sin(pct * TAU * 5);
+    const brake = clamp01(Math.max(-corner - 0.3, 0));
 
     const cars: CarEntry[] = FIELD.map((c) => {
       const wobble = 0.6 * Math.sin(t * 0.3 + c.carIdx);
@@ -225,17 +228,20 @@ export function startBrowserMock(target: TelemetryStore = store): () => void {
       sessionType: "Race",
       timeRemainingS: Math.max(1800 - t, 0),
       lapsRemaining: null,
+      totalCars: FIELD.length,
       lap,
       position: player.basePos,
       classPosition: classPosition(player),
       lastLapS: bestLap,
       bestLapS: bestLap,
+      currentLapS: t % LAP_SECONDS,
       deltaBestS: delta,
       deltaSessionBestS: delta + 0.1,
       fuelL: Math.max(60 - t * 0.02, 0),
       fuelPerLapL: 2.4,
       cars,
       playerCarIdx: PLAYER_IDX,
+      spectatedCarIdx: PLAYER_IDX,
       carName: "Mock GT3",
       onTrack: true,
       inGarage: false,
@@ -246,6 +252,48 @@ export function startBrowserMock(target: TelemetryStore = store): () => void {
       carRight: Math.abs(12 * Math.sin(t * 0.5 + 3)) < 3,
       trackPath: TRACK_PATH,
       trackTurns: TRACK_TURNS,
+      trackMetadata: null,
+      // Weather.
+      flagsRaw: 0,
+      airTempC: 22,
+      trackTempC: 31,
+      windSpeedMs: 3.5,
+      windDirRad: 1.2,
+      trackWetnessPct: 0,
+      precipitationPct: 0,
+      humidityPct: 0.55,
+      // Race control + chat feeds.
+      messages: [
+        { timeS: t - 30, kind: "info", text: "Fastest lap #92 — 1:45.51", priority: 5 },
+      ],
+      chatMessages: [
+        { user: "apex_andy", color: "#2fe08a", badge: null, text: "that overtake into 7 was clean", timeS: t - 12 },
+        { user: "turn1_tina", color: "#37d4ea", badge: "MOD", text: "fuel's gonna be tight", timeS: t - 8 },
+        { user: "slipstream_sam", color: "#ffb43d", badge: null, text: "P2 incoming let's go", timeS: t - 4 },
+      ],
+      // Pit info.
+      pitSpeedLimitMs: 22.35,
+      pitBoxDistM: null,
+      // Sector times.
+      sectorTimesS: {
+        s1: (t % LAP_SECONDS) * 0.33,
+        s2: pct > 0.33 ? (t % LAP_SECONDS) * 0.33 : null,
+        s3: pct > 0.66 ? (t % LAP_SECONDS) * 0.34 : null,
+      },
+      sectorBestS: {
+        s1: LAP_SECONDS * 0.33,
+        s2: LAP_SECONDS * 0.33,
+        s3: LAP_SECONDS * 0.34,
+      },
+      // In-car setup.
+      brakeBiasPct: 0.56,
+      absActive: brake > 0.8,
+      tcActive: false,
+      drsState: null,
+      ersPct: null,
+      fuelMix: null,
+      p2pAvailable: null,
+      tirePressures: { lfKpa: 127, rfKpa: 129, lrKpa: 122, rrKpa: 124 },
     };
     target.ingestSlow(slow);
   }, 1000 / SLOW_HZ);

@@ -110,6 +110,34 @@ export interface TirePressures {
   rrKpa: number | null;
 }
 
+/** A sector boundary marker for track metadata. */
+export interface TrackSector {
+  name: string;
+  /** Position as a fraction 0..1 of lap distance. */
+  marker: number;
+}
+
+/** A corner name entry from lovely-track-data. */
+export interface TrackTurnMarker {
+  name: string;
+  /** Position as a fraction 0..1 of lap distance. */
+  marker: number;
+}
+
+/** Supplementary track metadata from lovely-track-data. */
+export interface TrackMetadata {
+  country: string | null;
+  /** Track length in meters. */
+  length: number | null;
+  /** Pit entry position as a fraction 0..1 of lap distance. */
+  pitEntry: number | null;
+  /** Pit exit position as a fraction 0..1 of lap distance. */
+  pitExit: number | null;
+  sectors: TrackSector[];
+  /** Corner names from lovely-track-data, each with a marker (lap fraction). */
+  lovelyTurns: TrackTurnMarker[];
+}
+
 export interface SlowSample {
   sim: string;
   trackName: string | null;
@@ -158,6 +186,11 @@ export interface SlowSample {
    * `trackPath`. `null` when no turn data is available.
    */
   trackTurns: { label: string; x: number; y: number }[] | null;
+  /**
+   * Supplementary track metadata (corner names, sectors, pit markers) from
+   * lovely-track-data. `null` when no metadata is bundled for this track.
+   */
+  trackMetadata: TrackMetadata | null;
 
   // Weather.
   /** Raw session flag bitfield (sim-specific bits). */

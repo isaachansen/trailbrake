@@ -108,6 +108,10 @@ pub struct SessionState {
     /// `0.0..=1.0` space as `track_path`. `None` when no turn data is available.
     #[serde(default)]
     pub track_turns: Option<Vec<TrackTurn>>,
+    /// Supplementary track metadata (corner names, sectors, pit markers) from
+    /// lovely-track-data. `None` when no metadata is bundled for this track.
+    #[serde(default)]
+    pub track_metadata: Option<TrackMetadata>,
 }
 
 /// A race-control message (flag change, penalty, info, warning).
@@ -170,6 +174,54 @@ pub struct TrackTurn {
     pub label: String,
     pub x: f32,
     pub y: f32,
+}
+
+/// Supplementary track metadata (corner names, sectors, pit markers) sourced
+/// from the community-maintained lovely-track-data project at build time and
+/// merged into the baked track-map bundle. All fields optional — a track may
+/// have metadata with only some fields populated.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackMetadata {
+    /// ISO 3166 Alpha-2 country code (e.g. "IT", "US").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    /// Track length in meters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<u32>,
+    /// Pit entry position as a fraction `0.0..=1.0` of lap distance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pit_entry: Option<f32>,
+    /// Pit exit position as a fraction `0.0..=1.0` of lap distance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pit_exit: Option<f32>,
+    /// Sector boundaries (name + marker fraction along the lap).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sectors: Vec<TrackSector>,
+    /// Corner names from lovely-track-data, each with a `marker` (fraction
+    /// `0.0..=1.0` along the lap) and a `name`. The frontend can match these
+    /// to the baked turn positions by marker to display names instead of
+    /// numbers. May include both generic labels ("T1") and real names
+    /// ("Variante Tamburello").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lovely_turns: Vec<TrackTurnMarker>,
+}
+
+/// A sector boundary marker for track metadata.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackSector {
+    pub name: String,
+    /// Position as a fraction `0.0..=1.0` of lap distance.
+    pub marker: f32,
+}
+
+/// A corner name entry from lovely-track-data.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackTurnMarker {
+    /// Corner name (e.g. "Variante Tamburello", "T1").
+    pub name: String,
+    /// Position as a fraction `0.0..=1.0` of lap distance.
+    pub marker: f32,
 }
 
 /// The player's own car. Mix of fast path (pedals/rpm/...) and slow path

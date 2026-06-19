@@ -56,8 +56,6 @@ pub struct IRacingConnector {
     prev_fuel: Option<f32>,
     /// Previous flags, for generating race-control messages on flag changes.
     prev_flags: u32,
-    /// Previous sector index (0/1/2) for detecting sector crossings.
-    prev_sector: Option<i32>,
     /// Accumulated race-control messages (bounded).
     messages: Vec<RaceControlMessage>,
 }
@@ -118,7 +116,6 @@ impl IRacingConnector {
             prev_lap: None,
             prev_fuel: None,
             prev_flags: 0,
-            prev_sector: None,
             messages: Vec::new(),
         }
     }
@@ -361,9 +358,6 @@ impl SimConnector for IRacingConnector {
         let flags_raw = u32_var(vm, buf, "SessionFlags").unwrap_or(0);
         Self::on_flags_changed(&mut self.messages, &mut self.prev_flags, flags_raw);
 
-        // Current sector index (0/1/2) — available for future sector-crossing logic.
-        let _cur_sector = i32_var(vm, buf, "SectorIdx");
-
         let player = PlayerState {
             speed_ms: f32_var(vm, buf, "Speed"),
             rpm: f32_var(vm, buf, "RPM"),
@@ -495,6 +489,7 @@ impl SimConnector for IRacingConnector {
             // Bundled official centerline + corner labels for this track, if any.
             track_path: self.session_min.track_id.and_then(track_map::path_for),
             track_turns: self.session_min.track_id.and_then(track_map::turns_for),
+            track_metadata: self.session_min.track_id.and_then(track_map::metadata_for),
         };
 
         Some(TelemetrySnapshot {

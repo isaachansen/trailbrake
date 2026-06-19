@@ -19,6 +19,8 @@
 // touch the sim. (§3: decouple read from render, centralize, fast vs slow.)
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod track_maps;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Mutex;
@@ -172,6 +174,7 @@ struct SlowSample {
     car_right: Option<bool>,
     track_path: Option<Vec<[f32; 2]>>,
     track_turns: Option<Vec<overlay_core::TrackTurn>>,
+    track_metadata: Option<overlay_core::TrackMetadata>,
     // Weather.
     flags_raw: Option<u32>,
     air_temp_c: Option<f32>,
@@ -343,6 +346,7 @@ fn slow_from(snap: &TelemetrySnapshot) -> SlowSample {
         car_right: p.car_right,
         track_path: s.track_path.clone(),
         track_turns: s.track_turns.clone(),
+        track_metadata: s.track_metadata.clone(),
         flags_raw: s.flags_raw,
         air_temp_c: s.air_temp_c,
         track_temp_c: s.track_temp_c,
@@ -865,6 +869,9 @@ fn main() {
             }
 
             build_tray(&handle)?;
+            // Refresh track maps from the published bundle (background, non-blocking,
+            // offline-safe — falls back to the compiled-in baseline on any error).
+            track_maps::spawn_refresh(&handle);
             spawn_bridge(handle);
             Ok(())
         })

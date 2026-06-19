@@ -27,5 +27,6 @@ pub use record::RecordingConnector;
 pub use replay::ReplayConnector;
 pub use snapshot::{
     CarState, ChangeFlags, ChatMessage, Meta, PlayerState, RaceControlMessage, Sectors,
-    SessionState, SimId, TelemetrySnapshot, TirePressures, TrackTurn,
+    SessionState, SimId, TelemetrySnapshot, TirePressures, TrackMetadata, TrackSector,
+    TrackTurn, TrackTurnMarker,
 };

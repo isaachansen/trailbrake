@@ -1,0 +1,89 @@
+# Weekly auto-bake of iRacing track maps + lovely-track-data metadata.
+#
+# Fetches the latest track-map SVGs from iRacing's members-ng API (using a
+# long-lived session cookie), bakes them into normalized centerlines, merges
+# corner names / sectors / pit markers from the lovely-track-data project, and
+# publishes the result as a GitHub Release asset tagged `trackmaps-latest`.
+#
+# The app fetches this asset at startup and merges it on top of the compiled-in
+# baseline, so new tracks appear without an app update.
+#
+# Auth: iRacing's OAuth client registration is paused, so we use cookie-replay
+# (IRACING_COOKIE env var). The cookie lasts weeks/months; when it expires the
+# job fails gracefully — the previous `trackmaps-latest` release asset stays in
+# place, the app keeps working on the last-good bundle. Re-paste a fresh cookie
+# secret to resume (2 minutes, a few times a year).
+#
+# Secrets to configure (repo Settings → Secrets and variables → Actions):
+#   IRACING_COOKIE  — the full `cookie:` header value from a signed-in
+#                     members-ng.iracing.com request (see README "Track maps").
+#   IRACING_AUTH    — (optional) the `authorization:` header value, e.g.
+#                     "Bearer eyJ...". Omit if your session uses cookie-only auth.
+#
+# Manual trigger: Actions tab → "Refresh track maps" → Run workflow.
+# The `trackmaps-latest` release is updated in-place (not a new release each time).
+
+name: Refresh track maps
+
+on:
+  schedule:
+    # Weekly: Sunday 04:00 UTC
+    - cron: "0 4 * * 0"
+  workflow_dispatch: # Manual "refresh now"
+
+permissions:
+  contents: write # needed to update the release asset
+
+jobs:
+  bake:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Bake track maps from iRacing
+        env:
+          IRACING_COOKIE: ${{ secrets.IRACING_COOKIE }}
+          IRACING_AUTH: ${{ secrets.IRACING_AUTH }}
+        run: npm run fetch-track-maps
+
+      - name: Merge lovely-track-data metadata
+        run: npm run fetch-lovely-track-data
+
+      - name: Verify output
+        run: |
+          if [ ! -s crates/iracing-connector/assets/track_maps.json ]; then
+            echo "track_maps.json is missing or empty — aborting"
+            exit 1
+          fi
+          SIZE=$(wc -c < crates/iracing-connector/assets/track_maps.json)
+          echo "track_maps.json size: ${SIZE} bytes"
+          # Sanity: should be at least 100KB if tracks were baked successfully
+          if [ "$SIZE" -lt 10240 ]; then
+            echo "track_maps.json is suspiciously small (<10KB) — likely auth failed"
+            exit 1
+          fi
+
+      - name: Publish to trackmaps-latest release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: trackmaps-latest
+          name: Track maps (auto-refreshed)
+          body: |
+            Auto-baked track maps for the Trailbrake sim overlay.
+
+            Updated weekly from iRacing's official track-map SVGs + lovely-track-data metadata.
+            The app fetches this asset at startup and merges it on top of the compiled-in baseline.
+
+            Last updated: ${{ github.run_id }} (${{ github.run_started_at }})
+          allowUpdates: true
+          makeLatest: false
+          prerelease: true
+          artifacts: crates/iracing-connector/assets/track_maps.json
+          artifactContentType: application/json

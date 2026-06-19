@@ -16,3 +16,4 @@ mod session;
 mod track_map;
 
 pub use connector::IRacingConnector;
+pub use track_map::merge_external;
