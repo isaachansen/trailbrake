@@ -1,0 +1,16 @@
+[package]
+name = "overlay-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Phase 1 dev harness: drives a connector through the reader and prints normalized snapshots."
+
+[[bin]]
+name = "overlay-cli"
+path = "src/main.rs"
+
+[dependencies]
+overlay-core = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+iracing-connector = { workspace = true }

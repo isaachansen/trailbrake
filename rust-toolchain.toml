@@ -1,0 +1,4 @@
+[toolchain]
+channel = "stable"
+# Host/target left unpinned so the project builds with either the MSVC or GNU
+# Windows toolchain (and on macOS for mock/UI iteration). See README "Toolchain".

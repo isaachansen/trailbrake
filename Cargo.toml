@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/overlay-core",
+    "crates/iracing-connector",
+    "crates/lmu-connector",
+    "crates/overlay-cli",
+    "src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.77"
+
+[workspace.dependencies]
+# Internal crates
+overlay-core = { path = "crates/overlay-core" }
+iracing-connector = { path = "crates/iracing-connector" }
+
+# Shared third-party deps (kept deliberately small for Phase 1)
+serde = { version = "1", features = ["derive"] }
+# Win32 access for the iRacing reader. Only pulled in on Windows targets
+# (see iracing-connector/Cargo.toml target-gated dependency).
+windows = "0.59"
+
+[profile.release]
+# The reader hot path benefits from these; harmless for the rest.
+opt-level = 3
+lto = "thin"
+codegen-units = 1

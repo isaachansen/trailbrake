@@ -1,0 +1,37 @@
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# Node / frontend build output
+/node_modules
+/dist
+
+# Tauri generated schemas/artifacts
+/src-tauri/gen
+/src-tauri/target
+
+# Fixtures: keep the dir, ignore large recorded captures for now.
+/fixtures/*.bin
+/fixtures/*.irsdk
+
+# Raw track-map fetch cache + browser-saved offline data (re-derivable from
+# iRacing; the baked track_maps.json is committed, these intermediates are not).
+/scripts/.track-map-cache
+/scripts/iracing-data
+# Lovely-track-data fetch cache (re-derivable from the public lovely-track-data repo).
+/scripts/.lovely-cache
+
+# The 32MB pre-sampled dataset (assets/tracks.json) is a one-time fallback for
+# `fetch-track-maps -- --from-dataset`; re-derivable and too large to track.
+# The baked, compact result the connector compiles in lives at
+# crates/iracing-connector/assets/track_maps.json (committed).
+/assets/tracks.json
+
+# Curl cookie jar (may hold iRacing session cookies if used for manual fetches).
+/cookies.txt
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

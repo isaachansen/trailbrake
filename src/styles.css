@@ -1,0 +1,32 @@
+/* The overlay must be fully transparent so only the widgets composite over the
+   sim. Keep this minimal and flat — no heavy blurs/large semi-transparent fills
+   (perf non-negotiable #5). */
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+body {
+  font-family: "Saira Condensed", "Segoe UI", system-ui, sans-serif;
+  /* Don't let text selection get in the way while dragging widgets. */
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+/* The root overlay surface. In "race" mode it's click-through (handled natively
+   by the window); in edit mode it captures input so widgets can be moved. */
+.overlay-root {
+  position: fixed;
+  inset: 0;
+}

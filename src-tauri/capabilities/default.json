@@ -1,0 +1,12 @@
+{
+  "identifier": "default",
+  "description": "Core + event + global-shortcut access for the manager and overlay windows.",
+  "windows": ["manager", "overlay"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:default",
+    "core:webview:default",
+    "global-shortcut:default"
+  ]
+}

@@ -1,0 +1,9 @@
+[package]
+name = "lmu-connector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "STUB: Le Mans Ultimate connector seam (rFactor2 shared memory). Not yet implemented."
+
+[dependencies]
+overlay-core = { workspace = true }
