@@ -43,8 +43,9 @@ Cargo.lock.orig
 # Curl cookie jar (may hold iRacing session cookies if used for manual fetches).
 /cookies.txt
 
-# Editor / OS
+# Editor / OS / agent tooling
 .DS_Store
 .idea/
 .vscode/
 *.swp
+.claude/
