@@ -10,6 +10,7 @@ import { layoutStore, useLayout } from "../../store/layout";
 import { SESSION_STATES } from "../../store/sessionState";
 import { Field, Slider, Toggle } from "../ui";
 import { SoftwareUpdates } from "./SoftwareUpdates";
+import { BuyMeACoffee } from "../BuyMeACoffee";
 
 const VR_BACKENDS: { value: VrBackendKind; label: string }[] = [
   { value: "auto", label: "Auto (OpenVR, then OpenXR)" },
@@ -271,6 +272,14 @@ export function SettingsPage() {
       </div>
 
       <SoftwareUpdates />
+
+      <div className="card">
+        <div className="card-title">Support Trailbrake</div>
+        <p className="card-desc">Trailbrake is free. If it's earned a spot on your sim rig, a coffee keeps it going. ☕</p>
+        <div style={{ marginTop: 12 }}>
+          <BuyMeACoffee />
+        </div>
+      </div>
 
       <div className="card">
         <div className="card-title">About</div>

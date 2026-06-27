@@ -15,6 +15,8 @@ track map and more — composited right over your game, in real time.
 
 ### [⬇&nbsp; Download for Windows](https://github.com/isaachansen/trailbrake/releases/latest) &nbsp;·&nbsp; [Features](#features) &nbsp;·&nbsp; [Widgets](#widgets) &nbsp;·&nbsp; [FAQ](#faq)
 
+<a href="https://www.buymeacoffee.com/trailbrake"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=trailbrake&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" alt="Buy me a coffee" height="42" /></a>
+
 <br />
 
 <img src="docs/screenshot.png" alt="Trailbrake manager" width="880" />
