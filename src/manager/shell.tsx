@@ -1,21 +1,44 @@
-// Manager chrome: header (brand + primary edit toggle + status pill), the left
-// nav sidebar, and the bottom status bar. All read the shared status/layout
-// stores; the edit toggle drives the backend via `controls`.
+// Manager chrome (Trailbrake v2): the left icon nav-rail and the topbar (page
+// title + greeting, status pill, preview + edit actions). Reads the shared
+// status store; the edit/preview toggles drive the backend via `controls`.
 
 import { controls } from "../store/controls";
 import { useStatus, type OverlayStatus } from "../store/session";
-import { useSettings } from "../store/appSettings";
-import { useLayout } from "../store/layout";
 import { Icon, type IconName } from "./icons";
 
-export type Page = "widgets" | "profiles" | "hotkeys" | "settings";
+export type Page = "widgets" | "profiles" | "settings";
 
 const NAV: { id: Page; label: string; icon: IconName }[] = [
   { id: "widgets", label: "Widgets", icon: "widgets" },
   { id: "profiles", label: "Profiles", icon: "layers" },
-  { id: "hotkeys", label: "Hotkeys", icon: "keyboard" },
   { id: "settings", label: "Settings", icon: "settings" },
 ];
+
+const PAGE_META: Record<Page, { title: string; sub: string }> = {
+  widgets: { title: "Widgets", sub: "Toggle, preview and customize your overlay widgets." },
+  profiles: { title: "Profiles", sub: "Save overlay layouts and switch between them per car." },
+  settings: { title: "Settings", sub: "How and where the overlay appears." },
+};
+
+export function NavRail({ page, onNavigate }: { page: Page; onNavigate: (p: Page) => void }) {
+  return (
+    <nav className="mgr-rail">
+      <img className="rail-logo" src="/logo.png" alt="Trailbrake" />
+      <div className="rail-nav">
+        {NAV.map((item) => (
+          <button
+            key={item.id}
+            className={`nav-item${page === item.id ? " active" : ""}`}
+            onClick={() => onNavigate(item.id)}
+          >
+            <Icon name={item.icon} className="nav-ico" />
+            <span>{item.label}</span>
+          </button>
+        ))}
+      </div>
+    </nav>
+  );
+}
 
 function StatusPill({ status }: { status: OverlayStatus }) {
   if (status.editing) {
@@ -34,34 +57,32 @@ function StatusPill({ status }: { status: OverlayStatus }) {
   }
   return (
     <span className="pill">
-      <span className="dot" /> Idle
+      <span className="dot" style={{ background: "#5f6573", boxShadow: "none" }} /> No session
     </span>
   );
 }
 
-export function HeaderBar() {
+export function TopBar({ page }: { page: Page }) {
   const status = useStatus();
+  const meta = PAGE_META[page];
   return (
-    <header className="mgr-header">
-      <div className="brand">
-        <img className="brand-mark" src="/logo.png" alt="Trailbrake" />
-        <div className="brand-name">
-          Trailbrake
-          <small>telemetry hud</small>
-        </div>
+    <header className="mgr-topbar">
+      <div>
+        <h1 className="topbar-title">{meta.title}</h1>
+        <div className="topbar-sub">{meta.sub}</div>
       </div>
-      <div className="header-actions">
+      <div className="topbar-actions">
         <StatusPill status={status} />
         <button
-          className={status.preview ? "btn btn-lg btn-primary" : "btn btn-lg btn-ghost"}
+          className={status.preview ? "btn btn-primary" : "btn btn-ghost"}
           onClick={() => void controls.setPreview(!status.preview)}
-          title="Keep the overlay on screen outside of a session (click-through preview)"
+          title="Keep the overlay on screen outside of a session"
         >
           <Icon name="eye" size={16} />
           {status.preview ? "Preview on" : "Preview"}
         </button>
         <button
-          className={`btn btn-lg btn-primary${status.editing ? " is-active" : ""}`}
+          className={`btn btn-primary${status.editing ? " is-active" : ""}`}
           onClick={() => void controls.setEdit(!status.editing)}
           title="Show the overlay and make widgets draggable"
         >
@@ -70,63 +91,5 @@ export function HeaderBar() {
         </button>
       </div>
     </header>
-  );
-}
-
-export function Sidebar({ page, onNavigate }: { page: Page; onNavigate: (p: Page) => void }) {
-  const settings = useSettings();
-  return (
-    <nav className="sidebar">
-      {NAV.map((item) => (
-        <div
-          key={item.id}
-          className={`nav-item${page === item.id ? " active" : ""}`}
-          onClick={() => onNavigate(item.id)}
-        >
-          <Icon name={item.icon} className="nav-ico" />
-          {item.label}
-        </div>
-      ))}
-      <div className="sidebar-foot">
-        Edit hotkey
-        <div style={{ marginTop: 5 }}>
-          {settings.editHotkey.split("+").map((p, i) => (
-            <span key={i}>
-              {i > 0 && <span className="muted"> + </span>}
-              <span className="kbd">{p}</span>
-            </span>
-          ))}
-        </div>
-      </div>
-    </nav>
-  );
-}
-
-export function StatusBar() {
-  const status = useStatus();
-  const layout = useLayout();
-
-  const dotClass = status.editing ? "edit" : status.sessionActive ? "live" : "";
-  const stateText = status.editing
-    ? "Edit mode — overlay interactive"
-    : status.sessionActive
-      ? "In session — overlay live"
-      : status.preview
-        ? "Overlay shown (preview)"
-        : "Waiting for a session";
-
-  return (
-    <footer className="statusbar">
-      <span className={`sb-dot ${dotClass}`} />
-      <span>{stateText}</span>
-      <span className="spacer" />
-      <span>
-        Profile <b>{layout.active}</b>
-      </span>
-      <span className="muted">·</span>
-      <span>
-        Overlay <b>{status.overlayVisible ? "visible" : "hidden"}</b>
-      </span>
-    </footer>
   );
 }

@@ -254,6 +254,43 @@ The Relative/Standings widgets need the field: the mock (Rust + JS) emits a
 small multiclass grid, and the iRacing connector populates `cars[]` from the
 `CarIdx*` arrays + a tolerant `DriverInfo` YAML parse (names/class/color/iRating).
 
+## Releasing & auto-updates
+
+The app updates itself in place — users never reinstall. It uses Tauri's updater
+plugin pointed at this repo's GitHub Releases: each release carries the signed
+installer plus a `latest.json` manifest, and installed copies check
+`releases/latest/download/latest.json` and offer the update under **Settings →
+Software updates** (download + verify + install + relaunch). Every update is
+verified against the minisign public key baked into `tauri.conf.json`, so only
+builds signed with the matching private key are accepted.
+
+**Cut a release:**
+
+```sh
+npm run set-version 0.2.0          # bumps package.json + tauri.conf.json + Cargo.toml
+git commit -am "Release v0.2.0"
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+Pushing the `v*` tag runs `.github/workflows/release.yml`, which builds + signs
+the Windows installer and publishes the GitHub Release (installer + `latest.json`).
+That's the whole "upload a new version" step — existing installs pick it up.
+
+**One-time setup — signing key:** generate a keypair and store the private half
+as a repo secret (the public half lives in `tauri.conf.json`):
+
+```sh
+npm run tauri signer generate -- -w trailbrake-updater.key
+```
+
+Add two repo secrets under **Settings → Secrets and variables → Actions**:
+
+- `TAURI_SIGNING_PRIVATE_KEY` — the full contents of `trailbrake-updater.key`.
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the password you set (empty value if none).
+
+Keep the private key out of git. Lose it and you can't sign updates that existing
+installs will accept — you'd have to ship a new public key via a full reinstall.
+
 ## Status / next
 
 - **Phase 1:** reader spike + skeleton + mock. ✅

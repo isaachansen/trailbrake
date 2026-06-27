@@ -70,21 +70,6 @@ export function WidgetsPage() {
 
   return (
     <div>
-      <div className="page-head">
-        <div>
-          <h1>Widgets</h1>
-          <p>Toggle a widget on to add it to your overlay. Click any card to preview and customize it live.</p>
-        </div>
-        <div className="page-head-actions">
-          <span className="muted" style={{ fontSize: 13 }}>Profile</span>
-          <select className="select" value={layout.active} onChange={(e) => layoutStore.setActive(e.target.value)}>
-            {layoutStore.listProfiles().map((p) => (
-              <option key={p} value={p}>{p}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-
       <div className="widget-cards">
         {defs.map((def) => {
           const meta = widgetMeta(def.id, def.name);

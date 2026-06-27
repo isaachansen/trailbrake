@@ -28,6 +28,9 @@ export interface AppSettings {
   monitorIndex: number | null;
   /** Display units across all widgets (speed/fuel/temp). */
   units: UnitSystem;
+  /** Fill widgets with synthetic (mock) telemetry while the overlay is shown
+   *  (preview/edit) but no sim is feeding it. Real telemetry always takes over. */
+  previewMock: boolean;
   /** VR compositor placement + enable. */
   vr: VrSettings;
 }
@@ -46,6 +49,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoShow: true,
   monitorIndex: null,
   units: "metric",
+  previewMock: true,
   vr: { ...DEFAULT_VR_SETTINGS },
 };
 
@@ -62,6 +66,7 @@ const listeners = new Set<() => void>();
 // manager window — a separate JS context with its own store. The sync module
 // wires this broadcaster so a change propagates across windows.
 let unitsBroadcaster: ((u: UnitSystem) => void) | null = null;
+let previewMockBroadcaster: ((on: boolean) => void) | null = null;
 
 function emit() {
   settings = { ...settings };
@@ -190,6 +195,36 @@ export const settingsStore = {
     try {
       const parsed = JSON.parse(raw) as Partial<AppSettings>;
       if (parsed.units) this.applyUnits(parsed.units);
+    } catch {
+      /* ignore */
+    }
+  },
+
+  // --- cross-window preview-mock sync (same pattern as units) ---
+
+  /** Toggle synthetic data in preview; synced cross-window so the overlay reacts live. */
+  setPreviewMock(on: boolean) {
+    settings = { ...settings, previewMock: on };
+    emit();
+    schedulePersist();
+    previewMockBroadcaster?.(on);
+  },
+  setPreviewMockBroadcaster(fn: ((on: boolean) => void) | null) {
+    previewMockBroadcaster = fn;
+  },
+  /** Apply a preview-mock change received from another window (no persist / re-broadcast). */
+  applyPreviewMock(on: boolean) {
+    if (settings.previewMock === on) return;
+    settings = { ...settings, previewMock: on };
+    emit();
+  },
+  /** Load just the persisted preview-mock flag (overlay window doesn't run `init`). */
+  async loadPreviewMock() {
+    const raw = await loadSettings();
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as Partial<AppSettings>;
+      if (typeof parsed.previewMock === "boolean") this.applyPreviewMock(parsed.previewMock);
     } catch {
       /* ignore */
     }

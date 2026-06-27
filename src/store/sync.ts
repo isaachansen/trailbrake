@@ -15,6 +15,7 @@ const NONCE = Math.random().toString(36).slice(2);
 const EVT_LAYOUT = "overlay://layout-sync";
 const EVT_SELECT = "overlay://select-sync";
 const EVT_UNITS = "overlay://units-sync";
+const EVT_PREVIEW_MOCK = "overlay://preview-mock-sync";
 
 export async function initSync(): Promise<() => void> {
   if (!isTauri()) return () => {};
@@ -24,10 +25,13 @@ export async function initSync(): Promise<() => void> {
   layoutStore.setBroadcaster((blob) => void emit(EVT_LAYOUT, { nonce: NONCE, blob }));
   layoutStore.setSelectionBroadcaster((id) => void emit(EVT_SELECT, { nonce: NONCE, id }));
   settingsStore.setUnitsBroadcaster((u) => void emit(EVT_UNITS, { nonce: NONCE, u }));
+  settingsStore.setPreviewMockBroadcaster((on) => void emit(EVT_PREVIEW_MOCK, { nonce: NONCE, on }));
 
-  // Start this window in sync with the persisted units (the overlay window doesn't
-  // run settingsStore.init(), so it would otherwise stay on the default).
+  // Start this window in sync with the persisted units + preview-mock flag (the
+  // overlay window doesn't run settingsStore.init(), so it would otherwise stay
+  // on the defaults).
   await settingsStore.loadUnits();
+  await settingsStore.loadPreviewMock();
 
   const unLayout = await listen<{ nonce: string; blob: string }>(EVT_LAYOUT, (e) => {
     if (e.payload.nonce === NONCE) return;
@@ -41,13 +45,19 @@ export async function initSync(): Promise<() => void> {
     if (e.payload.nonce === NONCE) return;
     settingsStore.applyUnits(e.payload.u);
   });
+  const unPreviewMock = await listen<{ nonce: string; on: boolean }>(EVT_PREVIEW_MOCK, (e) => {
+    if (e.payload.nonce === NONCE) return;
+    settingsStore.applyPreviewMock(e.payload.on);
+  });
 
   return () => {
     layoutStore.setBroadcaster(null);
     layoutStore.setSelectionBroadcaster(null);
     settingsStore.setUnitsBroadcaster(null);
+    settingsStore.setPreviewMockBroadcaster(null);
     unLayout();
     unSelect();
     unUnits();
+    unPreviewMock();
   };
 }

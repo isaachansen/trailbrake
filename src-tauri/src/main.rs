@@ -865,6 +865,11 @@ fn main() {
             show_manager(app);
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // In-app auto-update (manager "Check for updates"): the updater plugin
+        // talks to the GitHub Releases manifest; `process` provides the relaunch
+        // used after an update installs. Both are driven from the frontend.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             load_overlay_config,
             save_overlay_config,

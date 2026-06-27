@@ -9,10 +9,9 @@ import { initTransport } from "../store/transport";
 import { layoutStore } from "../store/layout";
 import { settingsStore } from "../store/appSettings";
 import { controls } from "../store/controls";
-import { HeaderBar, Sidebar, StatusBar, type Page } from "./shell";
+import { NavRail, TopBar, type Page } from "./shell";
 import { WidgetsPage } from "./pages/WidgetsPage";
 import { ProfilesPage } from "./pages/ProfilesPage";
-import { HotkeysPage } from "./pages/HotkeysPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
 export default function ManagerApp() {
@@ -36,17 +35,15 @@ export default function ManagerApp() {
 
   return (
     <div className="mgr">
-      <HeaderBar />
-      <div className="mgr-body">
-        <Sidebar page={page} onNavigate={setPage} />
+      <NavRail page={page} onNavigate={setPage} />
+      <div className="mgr-main">
+        <TopBar page={page} />
         <main className="mgr-content">
           {page === "widgets" && <WidgetsPage />}
           {page === "profiles" && <ProfilesPage />}
-          {page === "hotkeys" && <HotkeysPage />}
           {page === "settings" && <SettingsPage />}
         </main>
       </div>
-      <StatusBar />
     </div>
   );
 }

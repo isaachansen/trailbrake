@@ -10,6 +10,7 @@ import { editModeStore } from "./store/editMode";
 import { controls, type VrWidgetLayout } from "./store/controls";
 import { useCaps, useSlow } from "./store/hooks";
 import { useVrStatus, useStatus } from "./store/session";
+import { useSettings } from "./store/appSettings";
 import { store } from "./store/store";
 import { startBrowserMock } from "./store/mockSource";
 import { deriveSessionState } from "./store/sessionState";
@@ -31,14 +32,16 @@ export default function OverlayApp() {
   const sessionState = deriveSessionState(slow);
   const vr = useVrStatus();
   const status = useStatus();
+  const settings = useSettings();
 
   // Demo data while idle: when the overlay is on screen (preview or edit) but no
   // sim is feeding it, run the mock so widgets show realistic data instead of
   // empty panels — you can preview and lay out the overlay without a session.
-  // Real telemetry always wins: the moment a session starts (sessionActive), the
-  // mock stops and the backend's live data takes over. Tauri-only — the browser
-  // dev shell already runs the mock continuously (see store/transport.ts).
-  const idlePreview = isTauri() && status.overlayVisible && !status.sessionActive;
+  // Gated by the "Demo data in preview" setting (default on, toggleable from the
+  // manager). Real telemetry always wins: the moment a session starts
+  // (sessionActive), the mock stops and the backend's live data takes over.
+  // Tauri-only — the browser dev shell already runs the mock continuously.
+  const idlePreview = isTauri() && status.overlayVisible && !status.sessionActive && settings.previewMock;
   useEffect(() => {
     if (!idlePreview) return;
     return startBrowserMock(store);

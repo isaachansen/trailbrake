@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.77"
@@ -23,6 +23,9 @@ vr-overlay = { path = "crates/vr-overlay" }
 
 # Shared third-party deps (kept deliberately small for Phase 1)
 serde = { version = "1", features = ["derive"] }
+# Required in the crate root by Tauri's generate_context! once the updater
+# plugin is configured (it embeds the signed-update manifest schema).
+serde_json = "1"
 # Win32 access for the iRacing reader. Only pulled in on Windows targets
 # (see iracing-connector/Cargo.toml target-gated dependency).
 windows = "0.59"

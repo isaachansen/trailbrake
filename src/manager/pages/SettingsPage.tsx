@@ -2,13 +2,14 @@
 // active telemetry source, and a manual overlay show/hide.
 
 import { useEffect, useState } from "react";
-import { settingsStore, useSettings } from "../../store/appSettings";
+import { settingsStore, useSettings, DEFAULT_SETTINGS } from "../../store/appSettings";
 import { useStatus, useVrStatus } from "../../store/session";
 import { controls, type MonitorInfo, type VrBackendKind } from "../../store/controls";
 import { isTauri } from "../../store/transport";
 import { layoutStore, useLayout } from "../../store/layout";
 import { SESSION_STATES } from "../../store/sessionState";
 import { Field, Slider, Toggle } from "../ui";
+import { SoftwareUpdates } from "./SoftwareUpdates";
 
 const VR_BACKENDS: { value: VrBackendKind; label: string }[] = [
   { value: "auto", label: "Auto (OpenVR, then OpenXR)" },
@@ -24,6 +25,16 @@ const SOURCE_LABEL: Record<string, string> = {
   "": "Auto-detect",
 };
 
+/** Map a KeyboardEvent to an accelerator key token, or null if not a usable key. */
+function keyToken(e: KeyboardEvent): string | null {
+  const code = e.code;
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
+  if (code === "Space") return "Space";
+  return null;
+}
+
 export function SettingsPage() {
   const settings = useSettings();
   const status = useStatus();
@@ -31,11 +42,34 @@ export function SettingsPage() {
   const layout = useLayout();
   const defaults = layout.defaults;
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
+  const [capturing, setCapturing] = useState(false);
+  const [hotkeyWarn, setHotkeyWarn] = useState(false);
 
   useEffect(() => {
     void controls.listMonitors().then(setMonitors);
     void controls.vrStatus();
   }, []);
+
+  // Capture a real key chord while "capturing", build the accelerator and apply it.
+  useEffect(() => {
+    if (!capturing) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const tok = keyToken(e);
+      if (!tok) return; // wait for a real key, not a bare modifier
+      const mods: string[] = [];
+      if (e.ctrlKey) mods.push("Ctrl");
+      if (e.altKey) mods.push("Alt");
+      if (e.shiftKey) mods.push("Shift");
+      if (e.metaKey) mods.push("Super");
+      setCapturing(false);
+      setHotkeyWarn(mods.length === 0);
+      void settingsStore.setEditHotkey([...mods, tok].join("+"));
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [capturing]);
 
   const vrCfg = settings.vr;
   // Status line: prefer the live backend message; fall back to a sensible hint.
@@ -45,13 +79,6 @@ export function SettingsPage() {
 
   return (
     <div className="settings-page">
-      <div className="page-head">
-        <div>
-          <h1>Settings</h1>
-          <p>How and where the overlay appears.</p>
-        </div>
-      </div>
-
       <div className="card">
         <div className="card-title">Overlay behaviour</div>
         <Field label="Auto-show in session">
@@ -64,6 +91,12 @@ export function SettingsPage() {
           <div className="row" style={{ flex: 1, justifyContent: "space-between" }}>
             <span className="hint">Keep the overlay visible now, even outside a session (for arranging widgets).</span>
             <Toggle on={status.preview || status.editing} onChange={(v) => void controls.setPreview(v)} />
+          </div>
+        </Field>
+        <Field label="Demo data in preview">
+          <div className="row" style={{ flex: 1, justifyContent: "space-between" }}>
+            <span className="hint">When the overlay is shown without a sim running, fill the widgets with realistic mock data. Live telemetry always takes over once a session starts.</span>
+            <Toggle on={settings.previewMock} onChange={(v) => settingsStore.setPreviewMock(v)} />
           </div>
         </Field>
       </div>
@@ -137,9 +170,43 @@ export function SettingsPage() {
         <Field label="Telemetry source">
           <span className="hint" style={{ flex: 1 }}>
             {SOURCE_LABEL[status.source] ?? status.source}
-            <span className="muted"> · set with the OVERLAY_SOURCE environment variable</span>
+            <span className="muted"> · auto-detects your sim (iRacing); set OVERLAY_SOURCE to force mock/replay in dev</span>
           </span>
         </Field>
+      </div>
+
+      <div className="card">
+        <div className="card-title">Hotkeys</div>
+        <p className="card-desc">Global shortcut to toggle overlay edit mode — works even while the game is focused.</p>
+        <div className="hotkey-capture">
+          <span className="field-label">Toggle edit mode</span>
+          <div className={`hotkey-display${capturing ? " capturing" : ""}`}>
+            {capturing ? (
+              "Press keys…"
+            ) : (
+              settings.editHotkey.split("+").map((p, i) => (
+                <span key={i} className="kbd">{p}</span>
+              ))
+            )}
+          </div>
+          <button className={`btn btn-sm${capturing ? " btn-primary" : ""}`} onClick={() => setCapturing((c) => !c)}>
+            {capturing ? "Cancel" : "Change…"}
+          </button>
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => {
+              setHotkeyWarn(false);
+              void settingsStore.setEditHotkey(DEFAULT_SETTINGS.editHotkey);
+            }}
+          >
+            Reset
+          </button>
+        </div>
+        {hotkeyWarn && (
+          <div className="hint" style={{ color: "var(--warn)", marginTop: 8 }}>
+            ⚠ No modifier — this may clash with normal typing in games.
+          </div>
+        )}
       </div>
 
       <div className="card">
@@ -203,12 +270,17 @@ export function SettingsPage() {
         </p>
       </div>
 
+      <SoftwareUpdates />
+
       <div className="card">
         <div className="card-title">About</div>
         <div className="hint">
-          <b style={{ color: "var(--text)" }}>Trailbrake</b> — a customizable telemetry overlay for racing sims.
-          Closing this window keeps it running in the system tray; reopen it from the tray icon. The overlay shows
-          automatically when you're in a session and hides when it's over.
+          <span className="row" style={{ justifyContent: "space-between", marginBottom: 6 }}>
+            <b style={{ color: "var(--text)" }}>Trailbrake</b>
+            <span className="muted" style={{ fontFamily: "var(--mono, monospace)" }}>v{__APP_VERSION__}</span>
+          </span>
+          A customizable telemetry overlay for racing sims. Closing this window keeps it running in the system tray;
+          reopen it from the tray icon. The overlay shows automatically when you're in a session and hides when it's over.
         </div>
       </div>
     </div>

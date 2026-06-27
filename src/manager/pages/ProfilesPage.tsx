@@ -25,13 +25,6 @@ export function ProfilesPage() {
 
   return (
     <div>
-      <div className="page-head">
-        <div>
-          <h1>Profiles</h1>
-          <p>Save different overlay layouts and switch between them — manually or automatically per car.</p>
-        </div>
-      </div>
-
       <div className="card">
         <div className="card-title">Layout profiles</div>
         {profiles.map((name) => {

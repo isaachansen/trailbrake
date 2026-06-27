@@ -286,16 +286,20 @@ export function startBrowserMock(target: TelemetryStore = store): () => void {
       // Pit info.
       pitSpeedLimitMs: 22.35,
       pitBoxDistM: null,
-      // Sector times.
-      sectorTimesS: {
-        s1: (t % LAP_SECONDS) * 0.33,
-        s2: pct > 0.33 ? (t % LAP_SECONDS) * 0.33 : null,
-        s3: pct > 0.66 ? (t % LAP_SECONDS) * 0.34 : null,
-      },
+      // Sector times for the Sector Delta widget. Sector delta is *progressive*:
+      // a sector's delta only exists once that sector is finished, and the whole
+      // set clears at the start/finish line. Demo that on a short looped "lap" —
+      // S1 appears, then S2, then S3, then it resets — each compared to a fixed
+      // best lap (one sector up/green, one close/amber, one down/red).
       sectorBestS: {
         s1: LAP_SECONDS * 0.33,
         s2: LAP_SECONDS * 0.33,
         s3: LAP_SECONDS * 0.34,
+      },
+      sectorTimesS: {
+        s1: (t % 13) / 13 >= 0.3 ? LAP_SECONDS * 0.33 + (-0.18 + 0.05 * Math.sin(t * 0.9)) : null,
+        s2: (t % 13) / 13 >= 0.62 ? LAP_SECONDS * 0.33 + (0.03 + 0.04 * Math.sin(t * 0.7)) : null,
+        s3: (t % 13) / 13 >= 0.9 ? LAP_SECONDS * 0.34 + (0.3 + 0.06 * Math.sin(t * 1.1)) : null,
       },
       // In-car setup.
       brakeBiasPct: 0.56,

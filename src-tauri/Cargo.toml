@@ -16,7 +16,13 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
+# In-app auto-update: checks the GitHub Releases `latest.json` manifest, then
+# downloads + verifies (minisign) + installs the new installer in place.
+# `process` exposes the relaunch used right after an update is applied.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { workspace = true }
+serde_json = { workspace = true }
 overlay-core = { workspace = true }
 # VR compositor. Lightweight no-op stub by default; the real OpenVR/OpenXR
 # backends are pulled in only with the `vr` feature (Windows + LLVM, see below).

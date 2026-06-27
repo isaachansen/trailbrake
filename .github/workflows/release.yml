@@ -1,0 +1,72 @@
+# Build, sign, and publish a Trailbrake release — this is what makes the in-app
+# auto-updater work.
+#
+# How to cut a release:
+#   1. npm run set-version 0.2.0   (bumps package.json + tauri.conf.json + Cargo.toml)
+#   2. commit, then:  git tag v0.2.0 && git push origin v0.2.0
+#
+# Pushing the tag triggers this workflow. It builds the Windows installer, signs
+# the updater artifacts with the minisign private key, and publishes a GitHub
+# Release containing the installer + a `latest.json` manifest. Existing installs
+# poll https://github.com/isaachansen/trailbrake/releases/latest/download/latest.json
+# (configured in src-tauri/tauri.conf.json) and offer the update in Settings.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   TAURI_SIGNING_PRIVATE_KEY           — contents of the minisign private key file
+#                                         generated with `npm run tauri signer generate`.
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  — that key's password ("" if generated
+#                                         without one — set the secret to an empty value).
+# The matching PUBLIC key is committed in tauri.conf.json (plugins.updater.pubkey);
+# the app verifies every downloaded update against it, so an attacker can't ship a
+# fake update without the private key.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: # Run from a tag ref to re-publish that version.
+
+permissions:
+  contents: write # create the release + upload assets
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build, sign, and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          # Use the pushed tag as-is (e.g. v0.2.0). tauri-action attaches the
+          # signed installer and generates/uploads latest.json.
+          tagName: ${{ github.ref_name }}
+          releaseName: "Trailbrake ${{ github.ref_name }}"
+          releaseBody: |
+            Download the installer below for a fresh install. Existing installs
+            will offer this update automatically (Settings → Software updates).
+          # Must be a published, non-prerelease release so the
+          # releases/latest/download/latest.json endpoint resolves to it.
+          releaseDraft: false
+          prerelease: false

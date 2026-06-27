@@ -90,11 +90,16 @@ struct SectorTimer {
     /// `SessionTime` recorded at the most recent crossing of each boundary,
     /// for the lap currently in progress. `None` until first crossed this lap.
     cross_times: Vec<Option<f64>>,
-    /// Most-recently completed time for each sector (s). Updated when the
-    /// sector's *end* boundary is crossed.
-    last_times: Vec<Option<f32>>,
-    /// Best (minimum) observed time for each sector across the session (s).
-    best_times: Vec<Option<f32>>,
+    /// Completed sector times for the lap *currently in progress* (s). `None`
+    /// until that sector is finished this lap, and the whole set clears at the
+    /// start/finish line — so the Sector Delta widget fills S1→S2→S3 as you drive
+    /// and resets each lap.
+    cur_lap_times: Vec<Option<f32>>,
+    /// Sector splits of the fastest *complete* lap seen this session — the
+    /// reference the deltas compare against ("vs your best lap").
+    best_lap_times: Vec<Option<f32>>,
+    /// Total time of that fastest complete lap (s), for picking the best lap.
+    best_lap_sum: Option<f32>,
     /// Previous `LapDistPct`, to detect forward crossings and lap wrap.
     prev_pct: Option<f32>,
     /// Previous `SessionTime`, to detect non-monotonic jumps (restart/replay).
@@ -111,16 +116,22 @@ impl SectorTimer {
         let n = starts.len();
         self.starts = starts.to_vec();
         self.cross_times = vec![None; n];
-        self.last_times = vec![None; n];
-        self.best_times = vec![None; n];
+        self.cur_lap_times = vec![None; n];
+        self.best_lap_times = vec![None; n];
+        self.best_lap_sum = None;
         self.prev_pct = None;
         self.prev_session_time = None;
     }
 
-    /// Reset only the in-progress lap accumulation (keeps best/last history).
+    /// Reset the in-progress lap (boundary crossings + this lap's splits), keeping
+    /// the banked best lap. Used on a session restart / replay scrub so a partial
+    /// lap across the gap is never counted or shown.
     fn reset_lap(&mut self) {
         for c in self.cross_times.iter_mut() {
             *c = None;
+        }
+        for t in self.cur_lap_times.iter_mut() {
+            *t = None;
         }
     }
 
@@ -167,9 +178,11 @@ impl SectorTimer {
         // Detect lap wrap (start/finish crossing): pct dropped sharply.
         let wrapped = pct + 0.5 < prev_pct;
         if wrapped {
-            // Finish the last sector (its end boundary is the 0.0 wrap), then
-            // start a fresh lap. The wrap crossing time becomes sector 0's start.
+            // Finish the last sector (its end boundary is the 0.0 wrap), bank the
+            // lap if it was timed clean, then start a fresh (empty) lap. The wrap
+            // crossing time becomes sector 0's start.
             self.record_crossing(0, prev_pct, pct, now, wrapped);
+            self.finish_lap();
             // Clear remaining in-progress times for the new lap, keep sector 0.
             for k in 1..n {
                 self.cross_times[k] = None;
@@ -193,8 +206,8 @@ impl SectorTimer {
     }
 
     /// Record that boundary `k` was crossed at `now`. If the *previous* sector
-    /// (the one ending at this boundary) has a recorded start, close it out:
-    /// its time = now − start, updating last/best.
+    /// (the one ending at this boundary) has a recorded start, close it out into
+    /// this lap's splits: its time = now − start.
     fn record_crossing(&mut self, k: usize, _prev_pct: f32, _pct: f32, now: f64, wrapped: bool) {
         let n = self.starts.len();
         if n == 0 {
@@ -205,12 +218,7 @@ impl SectorTimer {
         if let Some(start_t) = self.cross_times[ending] {
             let dt = now - start_t;
             if dt > 0.0 && dt < 3600.0 {
-                let secs = dt as f32;
-                self.last_times[ending] = Some(secs);
-                self.best_times[ending] = Some(match self.best_times[ending] {
-                    Some(b) => b.min(secs),
-                    None => secs,
-                });
+                self.cur_lap_times[ending] = Some(dt as f32);
             }
         }
         // This crossing starts sector k.
@@ -221,21 +229,40 @@ impl SectorTimer {
         let _ = wrapped;
     }
 
-    /// Current/most-recent completed times for the first 3 sectors.
-    fn current(&self) -> Sectors {
-        Sectors {
-            s1: self.last_times.first().copied().flatten(),
-            s2: self.last_times.get(1).copied().flatten(),
-            s3: self.last_times.get(2).copied().flatten(),
+    /// Called at the start/finish crossing. If every sector of the lap that just
+    /// ended was cleanly timed, bank it as the best lap when its total is the
+    /// fastest so far. Always clears this lap's splits so the next lap starts
+    /// empty (the widget resets at the line).
+    fn finish_lap(&mut self) {
+        let complete = !self.cur_lap_times.is_empty() && self.cur_lap_times.iter().all(Option::is_some);
+        if complete {
+            let sum: f32 = self.cur_lap_times.iter().flatten().copied().sum();
+            if self.best_lap_sum.map_or(true, |b| sum < b) {
+                self.best_lap_sum = Some(sum);
+                self.best_lap_times = self.cur_lap_times.clone();
+            }
+        }
+        for t in self.cur_lap_times.iter_mut() {
+            *t = None;
         }
     }
 
-    /// Best (minimum) times for the first 3 sectors.
+    /// Completed splits for the lap in progress (first 3 sectors) — `None` per
+    /// sector until finished this lap; all `None` right after the line.
+    fn current(&self) -> Sectors {
+        Sectors {
+            s1: self.cur_lap_times.first().copied().flatten(),
+            s2: self.cur_lap_times.get(1).copied().flatten(),
+            s3: self.cur_lap_times.get(2).copied().flatten(),
+        }
+    }
+
+    /// Splits of the fastest complete lap this session (the delta reference).
     fn best(&self) -> Sectors {
         Sectors {
-            s1: self.best_times.first().copied().flatten(),
-            s2: self.best_times.get(1).copied().flatten(),
-            s3: self.best_times.get(2).copied().flatten(),
+            s1: self.best_lap_times.first().copied().flatten(),
+            s2: self.best_lap_times.get(1).copied().flatten(),
+            s3: self.best_lap_times.get(2).copied().flatten(),
         }
     }
 }
@@ -883,46 +910,59 @@ mod tests {
         t0 + dur
     }
 
-    /// Drive a full lap at constant pace and check each sector closes out.
+    /// Sectors fill progressively through the lap and reset at the start/finish
+    /// line; the completed lap is banked as the best-lap reference.
     #[test]
-    fn computes_three_sector_times() {
+    fn fills_progressively_and_resets() {
         let mut t = timer3();
-        // Seed continuity just before the line, then drive a 90s lap that wraps,
-        // crossing 0.3 and 0.6, then wraps again to close the final sector.
-        t.update(Some(0.95), Some(0.0), true);
-        let mut now = sweep(&mut t, 0.95, 0.30, 0.0, 5.0); // wrap, into sector 1
-        now = sweep(&mut t, 0.30, 0.60, now, 30.0); // through 0.3 then to 0.6
-        now = sweep(&mut t, 0.60, 0.95, now, 30.0); // through 0.6
-        sweep(&mut t, 0.95, 0.30, now, 25.0); // wrap → close final sector
-
+        t.update(Some(0.95), Some(0.0), true); // seed continuity
+        // Cross the line to start a fresh, empty lap.
+        let mut now = sweep(&mut t, 0.95, 0.05, 0.0, 5.0);
         let cur = t.current();
-        assert!(cur.s1.is_some(), "s1 should be set");
-        assert!(cur.s2.is_some(), "s2 should be set");
-        assert!(cur.s3.is_some(), "s3 should be set");
-        for s in [cur.s1, cur.s2, cur.s3] {
-            let v = s.unwrap();
-            assert!(v > 0.0 && v < 200.0, "sector time out of range: {v}");
-        }
+        assert!(
+            cur.s1.is_none() && cur.s2.is_none() && cur.s3.is_none(),
+            "all sectors clear right after S/F"
+        );
+        // Finish sector 1 (cross 0.3).
+        now = sweep(&mut t, 0.05, 0.31, now, 30.0);
+        assert!(t.current().s1.is_some(), "S1 set after crossing 0.3");
+        assert!(t.current().s2.is_none() && t.current().s3.is_none(), "S2/S3 not done yet");
+        // Finish sector 2 (cross 0.6).
+        now = sweep(&mut t, 0.31, 0.61, now, 30.0);
+        assert!(t.current().s2.is_some(), "S2 set after crossing 0.6");
+        assert!(t.current().s3.is_none(), "S3 only completes at the line");
+        // Cross the line: S3 completes, the lap is banked, and the set resets.
+        sweep(&mut t, 0.61, 0.05, now, 30.0);
+        let cur = t.current();
+        assert!(
+            cur.s1.is_none() && cur.s2.is_none() && cur.s3.is_none(),
+            "reset at S/F"
+        );
+        assert!(t.best().s1.is_some(), "a full clean lap is banked as best");
     }
 
-    /// Best should track the minimum across laps.
+    /// `best()` holds the splits of the fastest *complete* lap (by total time),
+    /// not the per-sector minimum — and a slower lap never replaces it.
     #[test]
-    fn best_tracks_minimum() {
+    fn best_is_fastest_complete_lap() {
         let mut t = timer3();
         t.update(Some(0.95), Some(0.0), true);
-        // Lap 1: sector 1 (0.0→0.3 region) takes ~30s.
-        let mut now = sweep(&mut t, 0.95, 0.05, 0.0, 5.0); // wrap, start sector 0
-        now = sweep(&mut t, 0.05, 0.31, now, 30.0); // cross 0.3 → s1 ≈ 30s
-        let first = t.current().s1.unwrap();
-        assert!((first - 30.0).abs() < 2.0, "first s1 = {first}");
-        // Finish lap 1.
-        now = sweep(&mut t, 0.31, 0.65, now, 20.0);
-        now = sweep(&mut t, 0.65, 0.95, now, 20.0);
-        // Lap 2: faster sector 1 (~20s).
-        now = sweep(&mut t, 0.95, 0.05, now, 5.0); // wrap, start sector 0
-        sweep(&mut t, 0.05, 0.31, now, 20.0); // cross 0.3 → s1 ≈ 20s
-        assert!((t.current().s1.unwrap() - 20.0).abs() < 2.0);
-        assert!((t.best().s1.unwrap() - 20.0).abs() < 2.0);
+        // Lap A: S1≈30 (total the slower of the two timed laps).
+        let mut now = sweep(&mut t, 0.95, 0.05, 0.0, 5.0); // start lap A
+        now = sweep(&mut t, 0.05, 0.31, now, 30.0); // S1 ≈ 30
+        now = sweep(&mut t, 0.31, 0.61, now, 30.0); // S2 ≈ 30
+        now = sweep(&mut t, 0.61, 0.05, now, 30.0); // wrap → S3, lap A banked
+        assert!((t.best().s1.unwrap() - 30.0).abs() < 3.0, "lap A s1 ≈ 30: {:?}", t.best().s1);
+        // Lap B: faster sector 1 → faster overall → becomes the best lap.
+        now = sweep(&mut t, 0.05, 0.31, now, 20.0); // S1 ≈ 20
+        now = sweep(&mut t, 0.31, 0.61, now, 30.0); // S2 ≈ 30
+        now = sweep(&mut t, 0.61, 0.05, now, 30.0); // wrap → lap B banked (faster)
+        assert!((t.best().s1.unwrap() - 20.0).abs() < 3.0, "best now lap B s1 ≈ 20: {:?}", t.best().s1);
+        // Lap C: slower overall → must NOT replace the best.
+        now = sweep(&mut t, 0.05, 0.31, now, 40.0); // S1 ≈ 40
+        now = sweep(&mut t, 0.31, 0.61, now, 30.0);
+        sweep(&mut t, 0.61, 0.05, now, 30.0); // wrap → lap C banked? no, slower
+        assert!((t.best().s1.unwrap() - 20.0).abs() < 3.0, "best stays lap B: {:?}", t.best().s1);
     }
 
     /// No sectors → all None, no panic.

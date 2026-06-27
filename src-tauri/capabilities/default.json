@@ -7,6 +7,8 @@
     "core:event:default",
     "core:window:default",
     "core:webview:default",
-    "global-shortcut:default"
+    "global-shortcut:default",
+    "updater:default",
+    "process:default"
   ]
 }
