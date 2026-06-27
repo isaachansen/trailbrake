@@ -2,7 +2,7 @@
 
 <img src="public/logo.png" alt="Trailbrake" width="104" />
 
-# Trailbrake
+# Trailbrake (ALPHA)
 
 **A fast, fully-customizable telemetry overlay for sim racing.**
 
