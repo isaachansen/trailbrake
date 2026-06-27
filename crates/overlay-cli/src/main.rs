@@ -32,6 +32,8 @@ struct Args {
     print_hz: f64,
     /// Record every emitted snapshot to this JSONL file.
     record: Option<String>,
+    /// Cap the recorded rate (Hz); `None` records every frame (~60 Hz).
+    record_hz: Option<f64>,
     /// Replay file (used when source = replay).
     replay: Option<String>,
 }
@@ -41,6 +43,7 @@ fn parse_args() -> Args {
     let mut duration = None;
     let mut print_hz = 5.0;
     let mut record = None;
+    let mut record_hz = None;
     let mut replay = None;
 
     let mut it = std::env::args().skip(1);
@@ -59,6 +62,7 @@ fn parse_args() -> Args {
                 };
             }
             "--record" => record = it.next(),
+            "--record-hz" => record_hz = it.next().and_then(|s| s.parse::<f64>().ok()),
             "--replay" => replay = it.next(),
             "--duration" => {
                 duration = it
@@ -74,7 +78,7 @@ fn parse_args() -> Args {
             "-h" | "--help" => {
                 println!(
                     "overlay-cli [--source auto|mock|iracing|replay] [--replay FILE] \
-                     [--record FILE] [--duration SECONDS] [--print-hz HZ]"
+                     [--record FILE] [--record-hz HZ] [--duration SECONDS] [--print-hz HZ]"
                 );
                 std::process::exit(0);
             }
@@ -87,6 +91,7 @@ fn parse_args() -> Args {
         duration,
         print_hz,
         record,
+        record_hz,
         replay,
     }
 }
@@ -119,11 +124,16 @@ fn build_connector(args: &Args) -> Box<dyn SimConnector> {
     let source = build_source(args.source, args.replay.clone());
     match &args.record {
         Some(path) => {
-            println!("recording snapshots to {path}");
-            Box::new(RecordingConnector::new(source, path).unwrap_or_else(|e| {
-                eprintln!("cannot record to {path}: {e}");
-                std::process::exit(1);
-            }))
+            match args.record_hz {
+                Some(hz) => println!("recording snapshots to {path} (capped at {hz} Hz)"),
+                None => println!("recording snapshots to {path} (full rate)"),
+            }
+            Box::new(
+                RecordingConnector::with_max_hz(source, path, args.record_hz).unwrap_or_else(|e| {
+                    eprintln!("cannot record to {path}: {e}");
+                    std::process::exit(1);
+                }),
+            )
         }
         None => source,
     }

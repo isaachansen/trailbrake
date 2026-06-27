@@ -118,6 +118,8 @@ export function startBrowserMock(target: TelemetryStore = store): () => void {
   let fastInWindow = 0;
   let lastRateAt = start;
   let readerHz = FAST_HZ;
+  let prevGear: number | null = null;
+  let clutchAnim = 0; // decaying clutch "kick" on each gear change
 
   const fastTimer = window.setInterval(() => {
     const t = (performance.now() - start) / 1000;
@@ -137,6 +139,13 @@ export function startBrowserMock(target: TelemetryStore = store): () => void {
     const rpm = 4000 + 4500 * (0.3 + 0.7 * throttle) * (0.6 + 0.4 * Math.abs(corner));
     const steering = 0.6 * Math.sin(pct * TAU * 5 + 0.4);
 
+    // Clutch: a quick kick on each gear change (decays fast), plus held down at
+    // very low speed (launch / standstill).
+    if (prevGear !== null && gear !== prevGear) clutchAnim = 1;
+    prevGear = gear;
+    clutchAnim *= 0.8;
+    const clutch = clamp01(Math.max(clutchAnim, speed < 32 ? 0.6 : 0));
+
     fastInWindow += 1;
     const now = performance.now();
     if (now - lastRateAt >= 1000) {
@@ -155,13 +164,15 @@ export function startBrowserMock(target: TelemetryStore = store): () => void {
       gear,
       throttle,
       brake,
-      clutch: 0,
+      clutch,
       steeringRad: steering,
       lapDistPct: pct,
       currentLapS: t % LAP_SECONDS,
       brakeBiasPct: 0.56,
       absActive: brake > 0.8,
       tcActive: false,
+      carLeft: Math.abs(12 * Math.sin(t * 0.5 + 5)) < 3,
+      carRight: Math.abs(12 * Math.sin(t * 0.5 + 3)) < 3,
     } satisfies FastSample);
   }, 1000 / FAST_HZ);
 
@@ -205,7 +216,8 @@ export function startBrowserMock(target: TelemetryStore = store): () => void {
         gapToPlayerS: gap,
         lastLapS: c.bestLapS + 0.4 + 0.6 * Math.abs(Math.sin(t * 0.2 + c.carIdx)),
         bestLapS: c.bestLapS,
-        onPitRoad: false,
+        onPitRoad: c.carIdx === 6 || c.carIdx === 11,
+        inWorld: true,
         irating: c.irating,
         safetyRating: c.license,
         isPlayer: c.carIdx === PLAYER_IDX,
@@ -242,7 +254,7 @@ export function startBrowserMock(target: TelemetryStore = store): () => void {
       cars,
       playerCarIdx: PLAYER_IDX,
       spectatedCarIdx: PLAYER_IDX,
-      carName: "Mock GT3",
+      carName: "Ferrari 296 GT3",
       onTrack: true,
       inGarage: false,
       // Tie the screen-edge spotter glow to the two weaving "near" cars so it
@@ -254,7 +266,7 @@ export function startBrowserMock(target: TelemetryStore = store): () => void {
       trackTurns: TRACK_TURNS,
       trackMetadata: null,
       // Weather.
-      flagsRaw: 0,
+      flagsRaw: 0x40, // blue flag (faster car behind — let them pass)
       airTempC: 22,
       trackTempC: 31,
       windSpeedMs: 3.5,

@@ -1,0 +1,51 @@
+[package]
+name = "vr-overlay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "VR compositor: mirrors the overlay's widgets into per-widget OpenVR/OpenXR panels (Windows + `vr` feature)."
+
+# The real VR backends are opt-in. The default build pulls NO VR dependencies and
+# compiles to a no-op stub on every platform, so `cargo build --workspace` stays
+# light and cross-platform. Building the actual compositor needs LLVM/libclang
+# (ovr_overlay -> autocxx) and the Windows SDK:
+#
+#     cargo build -p sim-overlay-app --features vr
+#
+# See the crate docs (lib.rs) for the full prerequisite list.
+[features]
+default = []
+# OpenVR (SteamVR) — the working backend. Drags in ovr_overlay (autocxx) + WGC.
+openvr = ["dep:ovr_overlay", "dep:windows"]
+# OpenXR — best-effort; only lights up if the runtime exposes XR_EXTX_overlay.
+openxr = ["dep:openxr", "dep:windows"]
+# Convenience: both backends.
+vr = ["openvr", "openxr"]
+# Internal: compile-check the Windows Graphics Capture module without the
+# libclang-gated OpenVR dep. Not for end users.
+_wgc_check = ["dep:windows"]
+
+[dependencies]
+serde = { workspace = true }
+
+# Windows-only, and only when a VR backend feature is enabled. On any other
+# configuration none of these are compiled and the crate is a pure-Rust stub.
+[target.'cfg(windows)'.dependencies]
+ovr_overlay = { version = "0.0.0", default-features = false, optional = true }
+openxr = { version = "0.19", optional = true }
+windows = { workspace = true, optional = true, features = [
+    "Foundation",
+    "Graphics",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_System_Com",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+] }

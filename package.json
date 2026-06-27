@@ -9,8 +9,10 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "shoot-widgets": "node scripts/shoot-widgets.mjs",
     "fetch-track-maps": "node scripts/fetch-track-maps.mjs",
-    "fetch-lovely-track-data": "node scripts/fetch-lovely-track-data.mjs"
+    "fetch-lovely-track-data": "node scripts/fetch-lovely-track-data.mjs",
+    "fetch-lovely-car-data": "node scripts/fetch-lovely-car-data.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
@@ -25,6 +27,7 @@
     "@vitejs/plugin-react": "^4.3.3",
     "iracing-api": "^0.5.2",
     "jimp": "^0.22.12",
+    "playwright-core": "^1.61.0",
     "svg-path-properties": "^2.0.2",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"

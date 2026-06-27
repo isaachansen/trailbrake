@@ -13,16 +13,17 @@
 
 import { store } from "./store";
 import { editModeStore } from "./editMode";
-import { statusStore } from "./session";
+import { statusStore, vrStatusStore } from "./session";
 import { startBrowserMock } from "./mockSource";
 import type { Capabilities, FastSample, SlowSample } from "./types";
-import type { OverlayStatus } from "./session";
+import type { OverlayStatus, VrStatus } from "./session";
 
 export const EVT_FAST = "telemetry://fast";
 export const EVT_SLOW = "telemetry://slow";
 export const EVT_CAPS = "telemetry://caps";
 export const EVT_EDIT_MODE = "overlay://edit-mode";
 export const EVT_STATUS = "overlay://status";
+export const EVT_VR_STATUS = "overlay://vr-status";
 
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -48,6 +49,7 @@ async function start(): Promise<void> {
     listen<Capabilities>(EVT_CAPS, (e) => store.setCaps(e.payload)),
     listen<boolean>(EVT_EDIT_MODE, (e) => editModeStore.set(e.payload)),
     listen<OverlayStatus>(EVT_STATUS, (e) => statusStore.set(e.payload)),
+    listen<VrStatus>(EVT_VR_STATUS, (e) => vrStatusStore.set(e.payload)),
   ]);
   const stopSync = await initSync();
 

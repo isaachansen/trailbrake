@@ -3,14 +3,19 @@
 // and hidden natively by the backend (session-driven or via the manager); this
 // component only paints whatever the layout store holds.
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { defaultTheme } from "./theme/theme";
 import { initTransport, isTauri } from "./store/transport";
 import { editModeStore } from "./store/editMode";
-import { controls } from "./store/controls";
+import { controls, type VrWidgetLayout } from "./store/controls";
 import { useCaps, useSlow } from "./store/hooks";
+import { useVrStatus, useStatus } from "./store/session";
+import { store } from "./store/store";
+import { startBrowserMock } from "./store/mockSource";
 import { deriveSessionState } from "./store/sessionState";
 import { layoutStore, useLayout } from "./store/layout";
+import { getWidgetDef } from "./widgets/registry";
+import { ScreenLayerContext } from "./components/screenLayer";
 import { WidgetHost } from "./components/WidgetHost";
 import { Toolbar } from "./components/Toolbar";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -24,8 +29,24 @@ export default function OverlayApp() {
   const slow = useSlow();
   const carName = slow?.carName ?? null;
   const sessionState = deriveSessionState(slow);
-  const carLeft = slow?.carLeft ?? false;
-  const carRight = slow?.carRight ?? false;
+  const vr = useVrStatus();
+  const status = useStatus();
+
+  // Demo data while idle: when the overlay is on screen (preview or edit) but no
+  // sim is feeding it, run the mock so widgets show realistic data instead of
+  // empty panels — you can preview and lay out the overlay without a session.
+  // Real telemetry always wins: the moment a session starts (sessionActive), the
+  // mock stops and the backend's live data takes over. Tauri-only — the browser
+  // dev shell already runs the mock continuously (see store/transport.ts).
+  const idlePreview = isTauri() && status.overlayVisible && !status.sessionActive;
+  useEffect(() => {
+    if (!idlePreview) return;
+    return startBrowserMock(store);
+  }, [idlePreview]);
+
+  // Viewport-level layer that screen-effect widgets (Spotter edge glow) portal
+  // into — they can't reach the viewport from inside their backdrop-filtered box.
+  const [screenLayer, setScreenLayer] = useState<HTMLDivElement | null>(null);
 
   // Per-car profile auto-switch: when the car model changes, switch to its bound
   // profile (if any).
@@ -53,6 +74,36 @@ export default function OverlayApp() {
       cleanup?.();
     };
   }, []);
+
+  // When the VR compositor is running, mirror the *visible* widgets (same rules
+  // WidgetHost applies) to the backend as panel rectangles. The overlay window is
+  // the authority for what's actually on screen, and a widget's 2-D spot drives
+  // its 3-D placement. Rects are converted to physical pixels (× DPR) to match
+  // what Windows Graphics Capture reads.
+  useEffect(() => {
+    if (!vr.active) return;
+    const current = layout.profiles[layout.active];
+    if (!current) return;
+    const dpr = window.devicePixelRatio || 1;
+    const payload: VrWidgetLayout[] = [];
+    for (const inst of current.widgets) {
+      const def = getWidgetDef(inst.type);
+      if (!def || !inst.visible) continue;
+      const missing = def.requiredCapabilities.some((c) => caps && !caps[c]);
+      if (missing) continue;
+      const eff = layoutStore.getEffective(inst);
+      if (sessionState != null && !eff.showIn.includes(sessionState)) continue;
+      payload.push({
+        id: inst.instanceId,
+        x: Math.round(inst.position.x * dpr),
+        y: Math.round(inst.position.y * dpr),
+        w: Math.round(inst.size.w * dpr),
+        h: Math.round(inst.size.h * dpr),
+        depthM: inst.vrDepth ?? 0,
+      });
+    }
+    void controls.vrSetLayout(payload);
+  }, [vr.active, layout, caps, sessionState]);
 
   // In a plain browser, `e` toggles edit mode (the Tauri app uses a global shortcut).
   useEffect(() => {
@@ -82,51 +133,23 @@ export default function OverlayApp() {
         if (editing && e.target === e.currentTarget) layoutStore.select(null);
       }}
     >
-      {/* Spotter: full-height red glow on the side a car is alongside. */}
-      {layout.spotterEdges && (
-        <>
-          <div
-            className="spotter-edge"
-            style={{
-              position: "absolute",
-              top: 0,
-              bottom: 0,
-              left: 0,
-              width: "8%",
-              pointerEvents: "none",
-              background: "linear-gradient(to right, rgba(255,40,55,0.32), rgba(255,40,55,0))",
-              opacity: carLeft ? 0.9 : 0,
-              transition: "opacity 0.16s ease",
-            }}
-          />
-          <div
-            className="spotter-edge"
-            style={{
-              position: "absolute",
-              top: 0,
-              bottom: 0,
-              right: 0,
-              width: "8%",
-              pointerEvents: "none",
-              background: "linear-gradient(to left, rgba(255,40,55,0.32), rgba(255,40,55,0))",
-              opacity: carRight ? 0.9 : 0,
-              transition: "opacity 0.16s ease",
-            }}
-          />
-        </>
-      )}
+      {/* Screen-effect layer (under the widgets): the Spotter edge glow portals
+          its full-height red side fades here when a car is alongside. */}
+      <div ref={setScreenLayer} style={{ position: "absolute", inset: 0, pointerEvents: "none" }} />
 
-      {current?.widgets.map((inst) => (
-        <WidgetHost
-          key={inst.instanceId}
-          instance={inst}
-          editing={editing}
-          selected={inst.instanceId === layout.selectedId}
-          theme={theme}
-          caps={caps}
-          sessionState={sessionState}
-        />
-      ))}
+      <ScreenLayerContext.Provider value={{ el: screenLayer, preview: false, fullScreen: true }}>
+        {current?.widgets.map((inst) => (
+          <WidgetHost
+            key={inst.instanceId}
+            instance={inst}
+            editing={editing}
+            selected={inst.instanceId === layout.selectedId}
+            theme={theme}
+            caps={caps}
+            sessionState={sessionState}
+          />
+        ))}
+      </ScreenLayerContext.Provider>
 
       {editing && (
         <Toolbar

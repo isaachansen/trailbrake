@@ -29,6 +29,7 @@
 // Env: IRACING_LOGIN (account email) and IRACING_PWD (password).
 
 import { svgPathProperties } from "svg-path-properties";
+import { cleanTurns } from "./clean-track-turns.mjs";
 import { registerHooks } from "node:module";
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
@@ -178,6 +179,41 @@ function turnOnePoint(svg) {
   return null;
 }
 
+// All corner markers from iRacing's turns layer: each `<text>` element's real
+// label and position (in SVG coords — the same space as the active centerline,
+// since iRacing's layers are designed to overlay). iRacing's layer already
+// carries the canonical, in-sim corner labels (and exactly the corners the
+// official map shows), so we keep the label text verbatim and just position it,
+// rather than re-deriving / re-numbering markers from a third-party dataset.
+function extractTurns(svg) {
+  if (!svg) return [];
+  const out = [];
+  const re = /<text\b([^>]*)>([\s\S]*?)<\/text>/g;
+  let m;
+  while ((m = re.exec(svg))) {
+    const attrs = m[1];
+    const label = m[2].replace(/<[^>]*>/g, "").trim();
+    if (!label) continue;
+    let x = null;
+    let y = null;
+    const xa = /\bx\s*=\s*["']([-\d.]+)["']/.exec(attrs);
+    const ya = /\by\s*=\s*["']([-\d.]+)["']/.exec(attrs);
+    if (xa && ya) {
+      x = parseFloat(xa[1]);
+      y = parseFloat(ya[1]);
+    } else {
+      const tr = /translate\(\s*([-\d.]+)[\s,]+([-\d.]+)/.exec(attrs);
+      if (tr) {
+        x = parseFloat(tr[1]);
+        y = parseFloat(tr[2]);
+      }
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    out.push({ label, x, y });
+  }
+  return out;
+}
+
 function nearestIndex(pts, pt) {
   let idx = 0;
   let best = Infinity;
@@ -221,9 +257,26 @@ function bake(raw, override) {
   // Reverse the order but keep the S/F point pinned at index 0.
   if (direction === -1) pts = [pts[0], ...pts.slice(1).reverse()];
 
-  // Normalize into a 0..1 box, aspect-preserved, y-down (the widget renders
-  // y-down, so no flip).
-  return normalizeAspect(pts);
+  // One transform shared by the centerline and the corner markers so they stay
+  // aligned in the baked 0..1 space (aspect-preserved, y-down — the widget
+  // renders y-down, so no flip). Reordering/reversing pts above doesn't move the
+  // markers; the transform is purely geometric (based on the bounding box).
+  const t = aspectTransform(pts);
+  const points = pts.map(t);
+
+  // Corner labels straight from iRacing's turns layer (raw SVG coords), mapped
+  // through the same transform as the centerline. Keeps iRacing's own labels and
+  // placement — i.e. exactly the corners the official map shows.
+  let turns = [];
+  if (Array.isArray(raw.turns) && raw.turns.length) {
+    turns = raw.turns
+      .filter((tn) => tn && tn.label && Number.isFinite(tn.x) && Number.isFinite(tn.y))
+      .map((tn) => {
+        const [x, y] = t([tn.x, tn.y]);
+        return { label: String(tn.label), x, y };
+      });
+  }
+  return { points, turns };
 }
 
 // Compute the uniform (aspect-preserving) transform that maps a set of points
@@ -311,7 +364,8 @@ function bakeFromSampled(entry, override) {
       .sort((a, b) => a.d - b.d)
       .map((tn, i) => ({ label: String(i + 1), x: tn.p[0], y: tn.p[1] }));
   }
-  return { points, turns };
+  // Collapse the dataset's over-counted / runoff markers down to one per corner.
+  return { points, turns: cleanTurns(points, turns) };
 }
 
 // --- fetching ----------------------------------------------------------------
@@ -339,6 +393,8 @@ async function fetchRaw(asset) {
     activeD: activeSvg ? longestPath(activeSvg) : null,
     sfPoint: sfSvg ? centroidOf(sfSvg) : null,
     turn1: turnOnePoint(turnsSvg),
+    // Full corner set (label + SVG-space position) for the baked `turns`.
+    turns: extractTurns(turnsSvg),
   };
 }
 
@@ -364,8 +420,13 @@ async function main() {
       const cached = readJson(join(CACHE_DIR, f), null);
       if (!cached?.activeD) continue;
       try {
-        const points = bake(cached, overrides[String(cached.trackId)]);
-        out[String(cached.trackId)] = { name: cached.name, config: cached.config ?? null, points };
+        const { points, turns } = bake(cached, overrides[String(cached.trackId)]);
+        out[String(cached.trackId)] = {
+          name: cached.name,
+          config: cached.config ?? null,
+          points,
+          ...(turns.length ? { turns } : {}),
+        };
       } catch (e) {
         console.warn(`  skip ${cached.trackId} ${cached.name}: ${e.message}`);
       }
@@ -615,8 +676,13 @@ async function processAssets(assets, tracks, overrides, out) {
       continue;
     }
     try {
-      const points = bake(raw, overrides[idStr]);
-      out[idStr] = { name: info.name, config: info.config, points };
+      const { points, turns } = bake(raw, overrides[idStr]);
+      out[idStr] = {
+        name: info.name,
+        config: info.config,
+        points,
+        ...(turns.length ? { turns } : {}),
+      };
       ok++;
     } catch (e) {
       console.warn(`  bake fail ${id} ${info.name}: ${e.message}`);
@@ -628,7 +694,7 @@ async function processAssets(assets, tracks, overrides, out) {
 
 // Pure helpers are exported so the bake / SVG-parsing logic can be exercised on
 // synthetic SVG input without iRacing credentials.
-export { extractPathDs, longestPath, centroidOf, turnOnePoint, nearestIndex, bake };
+export { extractPathDs, longestPath, centroidOf, turnOnePoint, extractTurns, nearestIndex, bake };
 
 // Only fetch/bake when run as the entry point (not when imported for tests).
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

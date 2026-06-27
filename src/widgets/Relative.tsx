@@ -11,15 +11,17 @@
 // reorderable, per-session-type-toggleable set of telemetry fields (session,
 // position, lap times, fuel, …) configured from the settings panel.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSlow } from "../store/hooks";
 import { useSettings } from "../store/appSettings";
 import { fmtGap, fmtLapTime, fmtDelta, hexToRgba, fuelValue, fuelLabel, type UnitSystem } from "./format";
 import { flagOf, parseLicense, classColorMap, classColorOf } from "./raceColors";
 import { LicenseBadge } from "./LicenseBadge";
 import { TyreBadge } from "./TyreBadge";
+import { PitBadge } from "./PitBadge";
 import { CarIcon, carIconFor, isWideIcon } from "./carIcons";
 import type { CarEntry, SlowSample } from "../store/types";
+import { classifySessionType } from "./contract";
 import type { BaseWidgetProps, InfoFieldConfig, SessionType, WidgetDefinition } from "./contract";
 
 export interface RelativeConfig {
@@ -32,6 +34,8 @@ export interface RelativeConfig {
   showIrating: boolean;
   showTyre: boolean;
   showCarIcon: boolean;
+  /** In qualifying, show only the player (you're on a solo hot lap — no field). */
+  soloInQualy: boolean;
   /** Info fields shown above the rows (ordered, per-session-type). */
   header: InfoFieldConfig[];
   /** Info fields shown below the rows (ordered, per-session-type). */
@@ -60,15 +64,17 @@ function fmtClock(s: number | null | undefined): string | null {
   return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
 }
 
-/** Classify the sim's `sessionType` string into a coarse race/qualy/practice. */
-export function classifySessionType(s: string | null | undefined): SessionType | null {
-  if (!s) return null;
-  const t = s.toLowerCase();
-  if (t.includes("qual")) return "qualy";
-  if (t.includes("race")) return "race";
-  if (t.includes("practice") || t.includes("warmup") || t.includes("test") || t.includes("lone") || t.includes("open"))
-    return "practice";
-  return null;
+/** "current / total" laps. Total is exact when the race is lap-limited; in a
+ *  timed race it's estimated from time-left ÷ lap-time and prefixed with ~. */
+function lapsValue(s: SlowSample | null): string | null {
+  if (s?.lap == null) return null;
+  const cur = s.lap;
+  if (s.lapsRemaining != null) return `${cur} / ${cur + s.lapsRemaining}`;
+  const lapT = s.lastLapS ?? s.bestLapS;
+  if (s.timeRemainingS != null && lapT != null && lapT > 0) {
+    return `${cur} / ~${cur + Math.ceil(s.timeRemainingS / lapT)}`;
+  }
+  return `${cur} / --`;
 }
 
 const INFO_FIELDS: InfoFieldDef[] = [
@@ -77,7 +83,7 @@ const INFO_FIELDS: InfoFieldDef[] = [
   { key: "position", label: "Pos", render: (s) => (s?.position != null ? `P${s.position}` : null) },
   { key: "classPosition", label: "Class", render: (s) => (s?.classPosition != null ? `P${s.classPosition}` : null) },
   { key: "timeLeft", label: "Time", render: (s) => fmtClock(s?.timeRemainingS) },
-  { key: "lapsLeft", label: "Laps", render: (s) => (s?.lapsRemaining != null ? `${s.lapsRemaining}` : null) },
+  { key: "lapsLeft", label: "Laps", render: (s) => lapsValue(s) },
   { key: "lap", label: "Lap", render: (s) => (s?.lap != null ? `${s.lap}` : null) },
   { key: "last", label: "Last", render: (s) => (s?.lastLapS != null ? fmtLapTime(s.lastLapS) : null) },
   { key: "best", label: "Best", render: (s) => (s?.bestLapS != null ? fmtLapTime(s.bestLapS) : null) },
@@ -106,6 +112,7 @@ const defaultConfig: RelativeConfig = {
   showIrating: true,
   showTyre: true,
   showCarIcon: true,
+  soloInQualy: true,
   header: buildFieldDefaults(["sessionType", "position", "timeLeft"]),
   footer: buildFieldDefaults(["last", "best", "fuel"]),
 };
@@ -120,13 +127,13 @@ function visibleChips(entries: InfoFieldConfig[] | undefined, slow: SlowSample |
     .filter((x): x is { def: InfoFieldDef; value: string } => x.def != null && x.value != null);
 }
 
-function InfoBar({ chips, color, dim, mono }: { chips: { def: InfoFieldDef; value: string }[]; color: string; dim: string; mono: string }) {
+function InfoBar({ chips, color, dim, mono, label }: { chips: { def: InfoFieldDef; value: string }[]; color: string; dim: string; mono: string; label: string }) {
   if (chips.length === 0) return null;
   return (
     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "0.45em 0.9em", padding: "0 0.6em", fontSize: "0.7em" }}>
       {chips.map(({ def, value }) => (
         <span key={def.key} style={{ whiteSpace: "nowrap" }}>
-          <span style={{ color: dim, letterSpacing: "0.04em", marginRight: "0.45em" }}>{def.label}</span>
+          <span style={{ fontFamily: label, color: dim, letterSpacing: "0.04em", marginRight: "0.45em" }}>{def.label}</span>
           <span style={{ color, fontFamily: mono, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{value}</span>
         </span>
       ))}
@@ -138,14 +145,64 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
   const t = theme.colors;
   const mono = theme.font.mono;
   const slow = useSlow();
-  const cars = slow?.cars ?? [];
   const playerIdx = slow?.playerCarIdx ?? null;
-  const ccol = classColorMap(cars); // app palette by class order (blue/purple/green/red)
   const curSession = classifySessionType(slow?.sessionType);
+  // In qualifying you run a solo hot lap, so the field is just noise — show only
+  // the player when `soloInQualy` is on.
+  const soloQualy = config.soloInQualy && curSession === "qualy";
+  const cars = (slow?.cars ?? []).filter((c) => !soloQualy || c.isPlayer || c.carIdx === playerIdx);
+  const ccol = classColorMap(cars); // app palette by class order (blue/purple/green/red)
   const units = useSettings().units;
 
-  const headerChips = visibleChips(config.header, slow, curSession, units);
-  const footerChips = visibleChips(config.footer, slow, curSession, units);
+  // Provisional grid position. Before anyone sets a time (practice / pre-qualify)
+  // iRacing reports no running position, so the badge would otherwise read "--".
+  // iRacing seeds the starting order by iRating, so we reproduce that: rank the
+  // field by iRating (descending), both overall and within class, and use it only
+  // as a fallback — a real position from the sim always wins once it exists.
+  const { provPos, provClassPos } = useMemo(() => {
+    const rated = (slow?.cars ?? []).filter((c) => c.irating != null);
+    const provPos = new Map<number, number>();
+    [...rated]
+      .sort((a, b) => (b.irating ?? 0) - (a.irating ?? 0))
+      .forEach((c, i) => provPos.set(c.carIdx, i + 1));
+    const provClassPos = new Map<number, number>();
+    const byClass = new Map<number, CarEntry[]>();
+    for (const c of rated) {
+      const k = c.carClassId ?? 0;
+      let g = byClass.get(k);
+      if (!g) { g = []; byClass.set(k, g); }
+      g.push(c);
+    }
+    for (const g of byClass.values()) {
+      g.sort((a, b) => (b.irating ?? 0) - (a.irating ?? 0));
+      g.forEach((c, i) => provClassPos.set(c.carIdx, i + 1));
+    }
+    return { provPos, provClassPos };
+  }, [slow?.cars]);
+
+  /** A car's shown position: real (class, then overall) first, else the iRating
+   *  provisional. Returns the number and whether it's provisional. */
+  const posOf = (c: CarEntry): { pos: number | null; provisional: boolean } => {
+    const real = c.classPosition ?? c.position;
+    if (real != null) return { pos: real, provisional: false };
+    const prov = provClassPos.get(c.carIdx) ?? provPos.get(c.carIdx) ?? null;
+    return { pos: prov, provisional: prov != null };
+  };
+
+  // Surface the player's provisional position in the header/footer info chips too,
+  // so "Pos"/"Class" show the iRating-seeded number pre-qualify instead of nothing.
+  const slowForChips = useMemo(() => {
+    if (!slow || playerIdx == null) return slow;
+    if (slow.position != null && slow.classPosition != null) return slow;
+    return {
+      ...slow,
+      position: slow.position ?? provPos.get(playerIdx) ?? null,
+      classPosition: slow.classPosition ?? provClassPos.get(playerIdx) ?? null,
+    };
+  }, [slow, playerIdx, provPos, provClassPos]);
+
+  const headerChips = visibleChips(config.header, slowForChips, curSession, units);
+  const footerChips = visibleChips(config.footer, slowForChips, curSession, units);
 
   // Size-aware fit: measure the rows region (which flex-fills the space left by
   // the header/footer bars) and only ever show whole rows, so the bottom row is
@@ -167,8 +224,17 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
   }, []);
 
   // Sort by relative gap (ahead → behind), keeping only cars with a known gap.
+  // Drop cars that aren't in the world (`inWorld === false`): during practice the
+  // roster includes drivers sitting in their garage, whose stale track-time gives
+  // them a phantom gap that would otherwise drop them onto the relative. The
+  // player is always kept regardless.
   const ordered = cars
-    .filter((c) => c.gapToPlayerS != null || c.isPlayer || c.carIdx === playerIdx)
+    .filter(
+      (c) =>
+        c.isPlayer ||
+        c.carIdx === playerIdx ||
+        (c.inWorld !== false && c.gapToPlayerS != null)
+    )
     .sort((a, b) => (b.gapToPlayerS ?? 0) - (a.gapToPlayerS ?? 0));
 
   // Window: drop cars beyond ±windowSeconds (the player always stays).
@@ -216,13 +282,13 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
   return (
     <div style={{ width: "100%", height: "100%", overflow: "hidden", display: "flex", flexDirection: "column", color: t.text, padding: "6px 7px 7px", boxSizing: "border-box" }}>
       <div style={{ display: "flex", alignItems: "center", padding: "0 0.6em 5px" }}>
-        <span style={{ fontWeight: 700, fontSize: "0.82em", letterSpacing: "0.1em" }}>RELATIVE</span>
-        <span style={{ marginLeft: "auto", fontSize: "0.62em", color: t.textDim2, letterSpacing: "0.06em" }}>±{config.windowSeconds}s</span>
+        <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.82em", letterSpacing: "0.1em" }}>RELATIVE</span>
+        <span style={{ fontFamily: theme.font.label, marginLeft: "auto", fontSize: "0.62em", color: t.textDim2, letterSpacing: "0.06em" }}>±{config.windowSeconds}s</span>
       </div>
 
       {headerChips.length > 0 && (
-        <div style={{ paddingBottom: 5, marginBottom: 4, borderBottom: `1px solid ${hexToRgba("#ffffff", 0.07)}` }}>
-          <InfoBar chips={headerChips} color={t.text} dim={t.textDim2} mono={mono} />
+        <div style={{ paddingBottom: 5, marginBottom: 4, borderBottom: `1px solid ${hexToRgba("#ffffff", 0.12)}` }}>
+          <InfoBar chips={headerChips} color={t.text} dim={t.textDim2} mono={mono} label={theme.font.label} />
         </div>
       )}
 
@@ -233,6 +299,7 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
           visible.map((c, slot) => {
             const isPlayer = c.isPlayer || c.carIdx === playerIdx;
             const gap = c.gapToPlayerS ?? 0;
+            const inPit = c.onPitRoad === true;
             const lic = parseLicense(c.safetyRating);
             return (
               <div
@@ -246,37 +313,46 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
                   display: "grid",
                   gridTemplateColumns: cols,
                   alignItems: "center",
-                  gap: "0.5em",
+                  gap: "0.8em",
                   padding: "0 0.6em",
-                  borderRadius: 9,
+                  borderRadius: 8,
                   background: isPlayer ? "rgba(255, 45, 142, 0.32)" : hexToRgba(classColorOf(ccol, c.carClassId), 0.18),
                   boxShadow: isPlayer ? `inset 0 0 0 1.5px ${t.accent}` : "none",
                   color: isPlayer ? "#fff" : t.textDim,
                   fontWeight: isPlayer ? 800 : 500,
-                  transition: "top 0.35s cubic-bezier(.4,0,.2,1), background 0.2s",
+                  // In the pits → dim the row so it reads as "not a threat".
+                  opacity: inPit && !isPlayer ? 0.7 : 1,
+                  transition: "top 0.35s cubic-bezier(.4,0,.2,1), background 0.2s, opacity 0.2s",
                 }}
               >
-                {(c.classPosition ?? c.position) == null ? (
-                  <span style={{ color: t.textDim2 }}>--</span>
-                ) : (
-                  <span
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      minWidth: "1.55em",
-                      height: "1.55em",
-                      padding: "0 0.25em",
-                      borderRadius: 5,
-                      background: "rgba(0,0,0,0.28)",
-                      fontVariantNumeric: "tabular-nums",
-                      fontWeight: isPlayer ? 800 : 700,
-                      color: isPlayer ? "#fff" : t.text,
-                    }}
-                  >
-                    {c.classPosition ?? c.position}
-                  </span>
-                )}
+                {(() => {
+                  const { pos, provisional } = posOf(c);
+                  if (pos == null) return <span style={{ color: t.textDim2 }}>--</span>;
+                  return (
+                    <span
+                      title={provisional ? "Provisional — grid order seeded by iRating (no session position set yet)" : undefined}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        minWidth: "1.55em",
+                        height: "1.55em",
+                        padding: "0 0.25em",
+                        borderRadius: 5,
+                        // Real position → solid chip; provisional → outlined + italic
+                        // so it reads as a seeded estimate, not a live result.
+                        background: provisional ? "transparent" : "rgba(0,0,0,0.28)",
+                        boxShadow: provisional ? `inset 0 0 0 1px ${hexToRgba("#ffffff", 0.22)}` : "none",
+                        fontVariantNumeric: "tabular-nums",
+                        fontStyle: provisional ? "italic" : "normal",
+                        fontWeight: isPlayer ? 800 : 700,
+                        color: isPlayer ? "#fff" : provisional ? t.textDim : t.text,
+                      }}
+                    >
+                      {pos}
+                    </span>
+                  );
+                })()}
                 {has.flag && (
                   <span style={{ justifySelf: "center", display: "inline-block", width: "1.2em", height: "0.82em", borderRadius: 2, background: flagOf(c.country), boxShadow: "inset 0 0 0 1px rgba(0,0,0,.35)" }} />
                 )}
@@ -288,8 +364,11 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
                     })()}
                   </span>
                 )}
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginLeft: has.car ? "0.45em" : undefined, color: isPlayer ? "#fff" : t.text }}>
-                  {c.driverName ?? `Car ${c.carIdx}`}
+                <span style={{ display: "flex", alignItems: "center", gap: "0.45em", overflow: "hidden", marginLeft: has.car ? "0.65em" : undefined }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: isPlayer ? "#fff" : t.text }}>
+                    {c.driverName ?? `Car ${c.carIdx}`}
+                  </span>
+                  {inPit && <PitBadge color={t.amber} />}
                 </span>
                 {has.lic && (
                   <span style={{ justifySelf: "start", alignSelf: "stretch", display: "flex", alignItems: "center" }}>
@@ -316,8 +395,8 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
       </div>
 
       {footerChips.length > 0 && (
-        <div style={{ paddingTop: 5, marginTop: 4, borderTop: `1px solid ${hexToRgba("#ffffff", 0.07)}` }}>
-          <InfoBar chips={footerChips} color={t.text} dim={t.textDim2} mono={mono} />
+        <div style={{ paddingTop: 5, marginTop: 4, borderTop: `1px solid ${hexToRgba("#ffffff", 0.12)}` }}>
+          <InfoBar chips={footerChips} color={t.text} dim={t.textDim2} mono={mono} label={theme.font.label} />
         </div>
       )}
     </div>
@@ -341,6 +420,7 @@ export const relativeDef: WidgetDefinition<RelativeConfig> = {
     { key: "showIrating", label: "iRating", type: "boolean" },
     { key: "showTyre", label: "Tyre", type: "boolean" },
     { key: "showCarIcon", label: "Car icon", type: "boolean" },
+    { key: "soloInQualy", label: "Solo in qualy", type: "boolean" },
     { key: "header", label: "Header", type: "fieldList", fields: RELATIVE_INFO_CATALOG },
     { key: "footer", label: "Footer", type: "fieldList", fields: RELATIVE_INFO_CATALOG },
   ],

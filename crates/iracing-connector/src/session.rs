@@ -27,6 +27,9 @@ pub struct DriverEntry {
     /// 2-letter country code (ISO 3166-1 alpha-2), parsed from the driver's
     /// locale / country field in the YAML when present.
     pub country: Option<String>,
+    /// Position of this driver's pit stall as a fraction `0..1` of lap distance
+    /// (`DriverInfo.Drivers[].DriverPitTrkPct`). Used to derive distance-to-box.
+    pub pit_trk_pct: Option<f32>,
     /// True for the pace/safety car, so the connector can drop it from the field.
     pub is_pace_car: bool,
 }
@@ -37,10 +40,24 @@ pub struct SessionInfoMin {
     /// iRacing `WeekendInfo:TrackID`, used to look up the bundled track map.
     pub track_id: Option<u32>,
     pub driver_car_idx: Option<u32>,
+    /// iRacing `DriverInfo:DriverCarEstLapTime` — the estimated lap time (s) for
+    /// the player's car. Used to fold relative gaps into the shortest signed
+    /// track distance so neighbours don't jump a full lap across start/finish.
+    pub car_est_lap_time: Option<f32>,
     pub drivers: Vec<DriverEntry>,
     /// The current session's type label, e.g. "Practice", "Qualify", "Race",
     /// parsed from `SessionInfo.Sessions[].SessionType` / `SessionName`.
     pub session_type: Option<String>,
+    /// Sector-start fractions (0..1) from `SplitTimeInfo.Sectors[].SectorStartPct`,
+    /// in `SectorNum` order. iRacing exposes only these boundaries — per-sector
+    /// times are computed by the connector from `LapDistPct` crossings.
+    pub sector_starts: Vec<f32>,
+    /// Pit-lane speed limit (km/h) from `WeekendInfo:TrackPitSpeedLimit`. iRacing
+    /// has no telemetry var for this; it lives in the session YAML.
+    pub pit_speed_limit_kph: Option<f32>,
+    /// Track length (meters) from `WeekendInfo:TrackLength` ("X.XX km"). Used to
+    /// turn the pit-stall track-fraction into a distance.
+    pub track_length_m: Option<f32>,
 }
 
 /// Decode iRacing's NUL-terminated session-info block.
@@ -113,6 +130,15 @@ fn parse_color(s: &str) -> Option<u32> {
     }
 }
 
+/// Parse the leading number out of a value like `"80.00 kph"` or `"4.318 km"`.
+fn parse_leading_f32(s: &str) -> Option<f32> {
+    let t = s.trim();
+    let end = t
+        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
+        .unwrap_or(t.len());
+    t[..end].parse::<f32>().ok().filter(|v| v.is_finite())
+}
+
 /// Find the value of the first line whose trimmed content starts with `"{key}:"`.
 fn scan_value(yaml: &str, key: &str) -> Option<String> {
     let needle = format!("{key}:");
@@ -132,8 +158,15 @@ pub fn parse_min(yaml: &str) -> SessionInfoMin {
         track_name: scan_value(yaml, "TrackDisplayName").or_else(|| scan_value(yaml, "TrackName")),
         track_id: scan_value(yaml, "TrackID").and_then(|s| s.parse().ok()),
         driver_car_idx: None,
+        car_est_lap_time: None,
         drivers: Vec::new(),
         session_type: None,
+        sector_starts: Vec::new(),
+        // WeekendInfo values: "80.00 kph" / "4.318 km" — take the leading number.
+        pit_speed_limit_kph: scan_value(yaml, "TrackPitSpeedLimit").and_then(|s| parse_leading_f32(&s)),
+        track_length_m: scan_value(yaml, "TrackLength")
+            .and_then(|s| parse_leading_f32(&s))
+            .map(|km| km * 1000.0),
     };
 
     let lines: Vec<&str> = yaml.lines().collect();
@@ -157,6 +190,12 @@ pub fn parse_min(yaml: &str) -> SessionInfoMin {
 
         if let Some(v) = t.strip_prefix("DriverCarIdx:") {
             info.driver_car_idx = v.trim().parse().ok();
+            i += 1;
+            continue;
+        }
+
+        if let Some(v) = t.strip_prefix("DriverCarEstLapTime:") {
+            info.car_est_lap_time = v.trim().parse().ok().filter(|&l: &f32| l.is_finite() && l > 0.0);
             i += 1;
             continue;
         }
@@ -212,6 +251,8 @@ pub fn parse_min(yaml: &str) -> SessionInfoMin {
                     if !c.is_empty() && d.country.is_none() {
                         d.country = Some(c);
                     }
+                } else if let Some(x) = dt.strip_prefix("DriverPitTrkPct:") {
+                    d.pit_trk_pct = x.trim().parse().ok().filter(|p: &f32| p.is_finite());
                 }
                 i += 1;
             }
@@ -228,7 +269,66 @@ pub fn parse_min(yaml: &str) -> SessionInfoMin {
     // The connector can override this with the live `SessionNum` if needed.
     info.session_type = scan_session_type(yaml);
 
+    info.sector_starts = scan_sector_starts(yaml);
+
     info
+}
+
+/// Extract sector-start fractions from the `SplitTimeInfo.Sectors[]` block.
+/// Returns the `SectorStartPct` values ordered by `SectorNum`.
+///
+/// Example block:
+/// ```text
+/// SplitTimeInfo:
+///  Sectors:
+///  - SectorNum: 0
+///    SectorStartPct: 0.0000
+///  - SectorNum: 1
+///    SectorStartPct: 0.297693
+/// ```
+fn scan_sector_starts(yaml: &str) -> Vec<f32> {
+    let lines: Vec<&str> = yaml.lines().collect();
+    let mut i = 0;
+    // Find `SplitTimeInfo:` at indent 0.
+    while i < lines.len() {
+        if indent(lines[i]) == 0 && lines[i].trim_start().starts_with("SplitTimeInfo:") {
+            i += 1;
+            break;
+        }
+        i += 1;
+    }
+
+    // Collect (num, pct) pairs walking the block until a new top-level key.
+    let mut sectors: Vec<(i32, f32)> = Vec::new();
+    let mut cur_num: Option<i32> = None;
+    let mut cur_pct: Option<f32> = None;
+    while i < lines.len() {
+        let line = lines[i];
+        if !line.trim().is_empty() && indent(line) == 0 {
+            break;
+        }
+        let t = line.trim_start();
+        if let Some(v) = t.strip_prefix("- SectorNum:") {
+            // Flush any in-progress entry before starting the next one.
+            if let (Some(n), Some(p)) = (cur_num.take(), cur_pct.take()) {
+                sectors.push((n, p));
+            }
+            cur_num = v.trim().parse().ok();
+            cur_pct = None;
+        } else if let Some(v) = t.strip_prefix("SectorNum:") {
+            // Some builds put SectorNum on its own line under the list item.
+            cur_num = v.trim().parse().ok();
+        } else if let Some(v) = t.strip_prefix("SectorStartPct:") {
+            cur_pct = v.trim().parse().ok();
+        }
+        i += 1;
+    }
+    if let (Some(n), Some(p)) = (cur_num, cur_pct) {
+        sectors.push((n, p));
+    }
+
+    sectors.sort_by_key(|&(n, _)| n);
+    sectors.into_iter().map(|(_, p)| p).collect()
 }
 
 /// Extract the session type label from the `SessionInfo.Sessions[]` block.
@@ -293,6 +393,7 @@ WeekendInfo:
  TrackDisplayName: Circuit de Spa-Francorchamps
 DriverInfo:
  DriverCarIdx: 2
+ DriverCarEstLapTime: 88.5417
  Drivers:
  - CarIdx: 0
    UserName: Max: The Racer
@@ -314,6 +415,14 @@ SessionInfo:
  - SessionNum: 0
    SessionType: Open_Qualify
    SessionName: Open Qualify
+SplitTimeInfo:
+ Sectors:
+ - SectorNum: 0
+   SectorStartPct: 0.0000
+ - SectorNum: 1
+   SectorStartPct: 0.297693
+ - SectorNum: 2
+   SectorStartPct: 0.658859
  ";
 
     #[test]
@@ -345,9 +454,49 @@ SessionInfo:
     }
 
     #[test]
+    fn parses_est_lap_time() {
+        let info = parse_min(SAMPLE);
+        assert_eq!(info.car_est_lap_time, Some(88.5417));
+    }
+
+    #[test]
+    fn est_lap_time_absent_is_none() {
+        let yaml = "---\nDriverInfo:\n DriverCarIdx: 0\n Drivers:\n - CarIdx: 0\n   UserName: A\n";
+        let info = parse_min(yaml);
+        assert_eq!(info.car_est_lap_time, None);
+    }
+
+    #[test]
     fn parses_session_type() {
         let info = parse_min(SAMPLE);
         assert_eq!(info.session_type.as_deref(), Some("Qualify"));
+    }
+
+    #[test]
+    fn parses_sector_starts() {
+        let info = parse_min(SAMPLE);
+        assert_eq!(info.sector_starts.len(), 3);
+        assert!((info.sector_starts[0] - 0.0).abs() < 1e-6);
+        assert!((info.sector_starts[1] - 0.297693).abs() < 1e-6);
+        assert!((info.sector_starts[2] - 0.658859).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sector_starts_empty_when_block_absent() {
+        let yaml = "---\nWeekendInfo:\n TrackName: spa\nDriverInfo:\n DriverCarIdx: 0\n Drivers:\n - CarIdx: 0\n   UserName: A\n";
+        let info = parse_min(yaml);
+        assert!(info.sector_starts.is_empty());
+    }
+
+    #[test]
+    fn sector_starts_sorted_by_num() {
+        // Out-of-order SectorNum should still come back ordered.
+        let yaml = "---\nSplitTimeInfo:\n Sectors:\n - SectorNum: 2\n   SectorStartPct: 0.6\n - SectorNum: 0\n   SectorStartPct: 0.0\n - SectorNum: 1\n   SectorStartPct: 0.3\n";
+        let info = parse_min(yaml);
+        assert_eq!(info.sector_starts.len(), 3);
+        assert!((info.sector_starts[0] - 0.0).abs() < 1e-6);
+        assert!((info.sector_starts[1] - 0.3).abs() < 1e-6);
+        assert!((info.sector_starts[2] - 0.6).abs() < 1e-6);
     }
 
     #[test]

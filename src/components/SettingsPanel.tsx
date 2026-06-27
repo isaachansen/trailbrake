@@ -171,6 +171,13 @@ export function SettingsPanel({ instance, theme }: Props) {
         </div>
       </div>
 
+      <div style={rowStyle}>
+        <span style={labelStyle} title="In VR: push this panel nearer (−) or farther (+) than the others">VR depth</span>
+        <input type="range" min={-0.6} max={0.6} step={0.05} value={instance.vrDepth ?? 0}
+          onChange={(e) => layoutStore.updateInstance(instance.instanceId, { vrDepth: Number(e.target.value) })} style={{ flex: 1 }} />
+        <span style={{ width: 34, textAlign: "right" }}>{(instance.vrDepth ?? 0).toFixed(2)}</span>
+      </div>
+
       <div style={{ borderTop: `1px solid ${theme.colors.surfaceBorder}`, margin: "8px 0" }} />
 
       {/* Widget-specific schema */}

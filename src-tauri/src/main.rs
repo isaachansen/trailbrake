@@ -20,6 +20,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod track_maps;
+mod vr;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
@@ -62,10 +63,18 @@ struct OverlayState {
     session_active: AtomicBool,
     /// Whether to auto-show the overlay when a session starts.
     auto_show: AtomicBool,
+    /// VR compositor is running: force the overlay window shown so Windows
+    /// Graphics Capture has a rendered surface to read.
+    vr_active: AtomicBool,
     /// The selected telemetry source label, for the manager status line.
     source: Mutex<String>,
     /// The currently-registered edit-mode hotkey, so we can unregister it on change.
     edit_hotkey: Mutex<Shortcut>,
+    /// Whether the launch-time "show the manager window?" decision has been made.
+    /// Set true by the first telemetry frame (we started mid-session → stay in the
+    /// tray) or by the startup grace timer (no session → show the manager). Ensures
+    /// a mid-race restart never pops the control window over the game.
+    launch_manager_resolved: AtomicBool,
 }
 
 #[derive(Clone, Serialize)]
@@ -110,6 +119,10 @@ struct FastSample {
     abs_active: Option<bool>,
     /// TC active this frame.
     tc_active: Option<bool>,
+    /// Spotter: a car is alongside on the left (iRacing `CarLeftRight`).
+    car_left: Option<bool>,
+    /// Spotter: a car is alongside on the right (iRacing `CarLeftRight`).
+    car_right: Option<bool>,
 }
 
 #[derive(Clone, Serialize)]
@@ -134,6 +147,11 @@ struct CarMsg {
     last_lap_s: Option<f32>,
     best_lap_s: Option<f32>,
     on_pit_road: Option<bool>,
+    /// Whether the car is loaded into the world (on track / pits / off-track) vs.
+    /// not present (garage / disconnected). The Relative widget hides cars that
+    /// are not in the world so stale roster entries don't appear as phantom
+    /// neighbours. Must be forwarded here or the frontend filter sees `undefined`.
+    in_world: Option<bool>,
     irating: Option<i32>,
     safety_rating: Option<String>,
     rel_lat_m: Option<f32>,
@@ -280,6 +298,8 @@ fn fast_from(snap: &TelemetrySnapshot, reader_hz: f32) -> FastSample {
         brake_bias_pct: p.brake_bias_pct,
         abs_active: p.abs_active,
         tc_active: p.tc_active,
+        car_left: p.car_left,
+        car_right: p.car_right,
     }
 }
 
@@ -310,6 +330,7 @@ fn slow_from(snap: &TelemetrySnapshot) -> SlowSample {
             last_lap_s: c.last_lap_s,
             best_lap_s: c.best_lap_s,
             on_pit_road: c.on_pit_road,
+            in_world: c.in_world,
             irating: c.irating,
             safety_rating: c.safety_rating.clone(),
             rel_lat_m: c.rel_lat_m,
@@ -477,7 +498,9 @@ fn reconcile_overlay(app: &AppHandle) {
     let preview = st.preview.load(Ordering::SeqCst);
     let auto = st.auto_show.load(Ordering::SeqCst);
     let session = st.session_active.load(Ordering::SeqCst);
-    let visible = editing || preview || (auto && session);
+    // VR keeps the overlay window rendered (off in the headset, but capturable).
+    let vr = st.vr_active.load(Ordering::SeqCst);
+    let visible = editing || preview || (auto && session) || vr;
 
     if let Some(win) = app.get_webview_window("overlay") {
         if visible {
@@ -491,6 +514,15 @@ fn reconcile_overlay(app: &AppHandle) {
 
     let _ = app.emit(EVT_EDIT_MODE, editing);
     emit_status(app);
+}
+
+/// Flip the VR-active flag (so the overlay window stays rendered for capture) and
+/// reconcile. Called by the `vr` module when the compositor starts/stops.
+pub(crate) fn set_vr_active(app: &AppHandle, active: bool) {
+    app.state::<OverlayState>()
+        .vr_active
+        .store(active, Ordering::SeqCst);
+    reconcile_overlay(app);
 }
 
 /// Push the current status to the manager (status line / button states).
@@ -518,6 +550,11 @@ fn emit_status(app: &AppHandle) {
 /// ends we also clear preview/edit so the overlay reliably "disappears".
 fn set_session_active(app: &AppHandle, active: bool) {
     let st = app.state::<OverlayState>();
+    if active {
+        // Telemetry is flowing — claim the launch decision so the startup grace
+        // timer won't pop the manager window over a running game.
+        st.launch_manager_resolved.store(true, Ordering::SeqCst);
+    }
     let prev = st.session_active.swap(active, Ordering::SeqCst);
     if prev == active {
         return;
@@ -840,19 +877,27 @@ fn main() {
             get_status,
             list_monitors,
             set_overlay_monitor,
+            vr::vr_status,
+            vr::vr_set_enabled,
+            vr::vr_set_layout,
+            vr::vr_set_globals,
+            vr::vr_recenter,
         ])
         .manage(OverlayState {
             edit: AtomicBool::new(false),
             preview: AtomicBool::new(false),
             session_active: AtomicBool::new(false),
             auto_show: AtomicBool::new(true),
+            vr_active: AtomicBool::new(false),
             source: Mutex::new(String::new()),
             edit_hotkey: Mutex::new(
                 DEFAULT_EDIT_HOTKEY
                     .parse()
                     .expect("default hotkey must parse"),
             ),
+            launch_manager_resolved: AtomicBool::new(false),
         })
+        .manage(vr::VrState::default())
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -872,6 +917,24 @@ fn main() {
             // Refresh track maps from the published bundle (background, non-blocking,
             // offline-safe — falls back to the compiled-in baseline on any error).
             track_maps::spawn_refresh(&handle);
+
+            // Decide whether to open the control (manager) window. It starts hidden;
+            // on a normal desktop launch we show it after a short grace. But if a
+            // telemetry session goes live first (we were (re)started mid-race), the
+            // first frame claims the decision and we stay in the tray — the overlay
+            // auto-shows from telemetry, so we never cover the running game. The
+            // tray's "Open Trailbrake" still opens the window on demand.
+            let mgr_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(1500));
+                let st = mgr_handle.state::<OverlayState>();
+                if !st.launch_manager_resolved.swap(true, Ordering::SeqCst)
+                    && !st.session_active.load(Ordering::SeqCst)
+                {
+                    show_manager(&mgr_handle);
+                }
+            });
+
             spawn_bridge(handle);
             Ok(())
         })

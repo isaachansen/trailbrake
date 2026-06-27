@@ -22,13 +22,19 @@ crates/
   iracing-connector/   # Windows-only: irsdk shared-memory reader → snapshot;
                        #   bundled track maps (track_map.rs + assets/track_maps.json)
   lmu-connector/       # stubbed seam (Le Mans Ultimate / rFactor2) — not implemented
+  vr-overlay/          # opt-in VR compositor: per-widget OpenVR/OpenXR panels
+                       #   (Windows + `vr` feature) — see docs/VR.md
   overlay-cli/         # dev harness: run a source, print normalized snapshots
 src/                   # React + TS frontend: widgets, store (fast/slow), manager UI
 src-tauri/             # Tauri shell: windows, edit hotkey, reader→webview bridge
 scripts/               # fetch-track-maps.mjs (bakes the iRacing track-map asset)
 fixtures/              # recorded telemetry (JSONL) for replay
-docs/                  # ADDING_A_WIDGET.md, ADDING_A_SIM.md
+docs/                  # ADDING_A_WIDGET.md, ADDING_A_SIM.md, VR.md
 ```
+
+**VR:** widgets can also be mirrored into VR as individually-placed floating
+panels (OpenVR/SteamVR; OpenXR best-effort). Opt-in build (`--features vr`,
+Windows + LLVM). See **[docs/VR.md](docs/VR.md)**.
 
 The architecture boundary the whole project hangs on: **no iRacing-specific
 type appears above `overlay-core`.** A connector reads its sim and normalizes
@@ -171,6 +177,13 @@ TRACKS_DATASET=path/to/other.json npm run fetch-track-maps -- --from-dataset
 
 This is the current default source for this repo. The modes below fetch from
 iRacing directly and only matter if you're regenerating from iRacing's API.
+
+> **Corner labels.** The `--from-dataset` path derives corner markers from the
+> dataset's `normalizedTurns`, which can over-count and mis-place them (e.g. Red
+> Bull Ring bakes 16 markers for a 10-corner track). The direct-fetch modes below
+> read the corners straight from iRacing's **turns** SVG layer — the same source
+> iRacing's own map uses — keeping its native labels and placement. Prefer a
+> direct/offline re-bake if your corner numbers look wrong.
 
 **Authenticating (direct iRacing fetch).** iRacing retired legacy
 username/password API auth on 2025-12-09 *and has paused new OAuth client

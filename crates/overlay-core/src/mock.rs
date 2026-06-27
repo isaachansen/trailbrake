@@ -429,7 +429,7 @@ impl MockConnector {
                 time_remaining_s: Some((1800.0 - t as f64).max(0.0)),
                 laps_remaining: None,
                 total_cars: Some(1),
-                flags_raw: Some(0),
+                flags_raw: Some(0x40), // blue flag (faster car behind — let them pass)
                 air_temp_c: Some(22.0),
                 track_temp_c: Some(31.0),
                 wind_speed_ms: Some(3.5),
@@ -490,7 +490,7 @@ impl MockConnector {
                 position: Some(5),
                 class_position: Some(class_position(1, 5)),
                 car_idx: Some(PLAYER_IDX),
-                car_name: Some("Mock GT3".to_string()),
+                car_name: Some("Ferrari 296 GT3".to_string()),
                 on_track: Some(true),
                 in_garage: Some(false),
                 // Tie the spotter to the two weaving "near" cars (idx 3 right, 5 left)
@@ -573,7 +573,10 @@ impl MockConnector {
                     gap_to_player_s: Some(gap),
                     last_lap_s: Some(c.best + 0.4 + 0.6 * (t * 0.2 + c.idx as f32).sin().abs()),
                     best_lap_s: Some(c.best),
-                    on_pit_road: Some(false),
+                    // A couple of cars sit on pit road so the Relative/Standings
+                    // PIT indicator has something to show in mock/preview.
+                    on_pit_road: Some(c.idx == 6 || c.idx == 11),
+                    in_world: Some(true),
                     irating: Some(c.irating),
                     safety_rating: Some(c.license.to_string()),
                     rel_lat_m,

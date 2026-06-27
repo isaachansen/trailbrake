@@ -348,6 +348,14 @@ pub struct CarState {
     pub last_lap_s: Option<f32>,
     pub best_lap_s: Option<f32>,
     pub on_pit_road: Option<bool>,
+    /// Whether this car is currently loaded into the world (on track, in the
+    /// pits, or off-track) vs. not present in the session (in the garage,
+    /// disconnected, or not yet joined). `None` when the sim doesn't
+    /// distinguish. The Relative widget hides cars that are not in the world so
+    /// stale roster entries (e.g. drivers sitting in the garage during practice)
+    /// don't appear as phantom neighbours around the player.
+    #[serde(default)]
+    pub in_world: Option<bool>,
     pub irating: Option<i32>,
     pub safety_rating: Option<String>,
     /// Lateral offset from the player in meters (+right / −left), for the radar.

@@ -6,8 +6,18 @@
 
 import { useSyncExternalStore } from "react";
 import { loadSettings, saveSettings } from "./persistence";
-import { controls } from "./controls";
+import { controls, type VrBackendKind, type VrGlobals } from "./controls";
 import type { UnitSystem } from "../widgets/format";
+
+/** Persisted VR placement settings (mirror of `VrGlobals` + enable/backend). */
+export interface VrSettings {
+  enabled: boolean;
+  backend: VrBackendKind;
+  distanceM: number;
+  scale: number;
+  curvature: number;
+  headLocked: boolean;
+}
 
 export interface AppSettings {
   /** Accelerator string for the edit-mode toggle, e.g. "Ctrl+Shift+O". */
@@ -18,14 +28,31 @@ export interface AppSettings {
   monitorIndex: number | null;
   /** Display units across all widgets (speed/fuel/temp). */
   units: UnitSystem;
+  /** VR compositor placement + enable. */
+  vr: VrSettings;
 }
+
+export const DEFAULT_VR_SETTINGS: VrSettings = {
+  enabled: false,
+  backend: "auto",
+  distanceM: 0.9,
+  scale: 1,
+  curvature: 0.15,
+  headLocked: false,
+};
 
 export const DEFAULT_SETTINGS: AppSettings = {
   editHotkey: "Ctrl+Shift+O",
   autoShow: true,
   monitorIndex: null,
   units: "metric",
+  vr: { ...DEFAULT_VR_SETTINGS },
 };
+
+/** Extract the backend-facing `VrGlobals` from the settings. */
+export function vrGlobalsOf(vr: VrSettings): VrGlobals {
+  return { distanceM: vr.distanceM, scale: vr.scale, curvature: vr.curvature, headLocked: vr.headLocked };
+}
 
 let settings: AppSettings = { ...DEFAULT_SETTINGS };
 let loaded = false;
@@ -65,7 +92,8 @@ export const settingsStore = {
     if (raw) {
       try {
         const parsed = JSON.parse(raw) as Partial<AppSettings>;
-        settings = { ...DEFAULT_SETTINGS, ...parsed };
+        // Deep-merge the nested VR block so new fields pick up defaults.
+        settings = { ...DEFAULT_SETTINGS, ...parsed, vr: { ...DEFAULT_VR_SETTINGS, ...(parsed.vr ?? {}) } };
       } catch {
         /* keep defaults */
       }
@@ -78,6 +106,42 @@ export const settingsStore = {
     if (settings.monitorIndex != null) {
       await controls.setOverlayMonitor(settings.monitorIndex).catch(() => {});
     }
+    // Re-arm VR if it was on (no-op / graceful error if the runtime isn't up).
+    if (settings.vr.enabled) {
+      await controls.vrSetEnabled(true, vrGlobalsOf(settings.vr), settings.vr.backend).catch(() => {});
+    }
+  },
+
+  /** Turn the VR compositor on/off. Returns the backend message on failure so
+   *  the UI can show "SteamVR not running" etc. */
+  async setVrEnabled(enabled: boolean): Promise<string | null> {
+    settings = { ...settings, vr: { ...settings.vr, enabled } };
+    emit();
+    schedulePersist();
+    try {
+      await controls.vrSetEnabled(enabled, vrGlobalsOf(settings.vr), settings.vr.backend);
+      return null;
+    } catch (e) {
+      // Roll the toggle back so it reflects reality.
+      settings = { ...settings, vr: { ...settings.vr, enabled: false } };
+      emit();
+      schedulePersist();
+      return e instanceof Error ? e.message : String(e);
+    }
+  },
+
+  setVrBackend(backend: VrBackendKind) {
+    settings = { ...settings, vr: { ...settings.vr, backend } };
+    emit();
+    schedulePersist();
+  },
+
+  /** Update one or more VR placement values; pushes live if VR is running. */
+  setVrGlobals(partial: Partial<VrGlobals>) {
+    settings = { ...settings, vr: { ...settings.vr, ...partial } };
+    emit();
+    schedulePersist();
+    if (settings.vr.enabled) void controls.vrSetGlobals(vrGlobalsOf(settings.vr)).catch(() => {});
   },
 
   async setEditHotkey(accel: string) {

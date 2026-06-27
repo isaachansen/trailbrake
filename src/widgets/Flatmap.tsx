@@ -9,6 +9,7 @@ import { useEffect, useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
 import { useSlow } from "../store/hooks";
 import { classColorMap, classColorOf } from "./raceColors";
+import { WidgetTitle } from "./WidgetTitle";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface FlatmapConfig {
@@ -75,11 +76,20 @@ function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
       const h = cssH;
       ctx.clearRect(0, 0, w, h);
 
-      const padX = 16;
-      const lineY = h * 0.5;
-      const X = (f: number) => padX + (((f % 1) + 1) % 1) * (w - 2 * padX);
+      // `padX` reserves room for the start/finish posts; `inset` keeps car
+      // markers (and the player glow) clear of those posts and the box edge so a
+      // car at 0%/100% never collides with the post or gets clipped.
+      const playerR = 7;
+      const glowR = playerR + 5;
+      const padX = Math.min(22, w * 0.06);
+      const inset = padX + glowR;
+      const lineY = Math.round(h * 0.5) + 0.5;
+      const span = Math.max(1, w - 2 * inset);
+      const X = (f: number) => inset + (((f % 1) + 1) % 1) * span;
+      const tickH = Math.min(11, h * 0.12);
+      const postH = Math.min(15, h * 0.17);
 
-      // Lap line.
+      // Lap line (spans the full marker range, post to post).
       ctx.strokeStyle = "rgba(255,255,255,0.14)";
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -91,15 +101,16 @@ function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
       ctx.strokeStyle = "rgba(255,255,255,0.16)";
       ctx.lineWidth = 1;
       for (const s of [1 / 3, 2 / 3]) {
+        const tx = Math.round(X(s)) + 0.5;
         ctx.beginPath();
-        ctx.moveTo(X(s), lineY - 11);
-        ctx.lineTo(X(s), lineY + 11);
+        ctx.moveTo(tx, lineY - tickH);
+        ctx.lineTo(tx, lineY + tickH);
         ctx.stroke();
       }
       // Start/finish posts.
       ctx.fillStyle = "rgba(255,255,255,0.55)";
-      ctx.fillRect(padX - 1.5, lineY - 15, 3, 30);
-      ctx.fillRect(w - padX - 1.5, lineY - 15, 3, 30);
+      ctx.fillRect(Math.round(padX) - 1.5, lineY - postH, 3, postH * 2);
+      ctx.fillRect(Math.round(w - padX) - 1.5, lineY - postH, 3, postH * 2);
 
       const slow = store.getSlow();
       const playerIdx = slow?.playerCarIdx ?? null;
@@ -110,25 +121,35 @@ function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
         if (player) {
           ctx.fillStyle = "rgba(255,45,142,0.35)";
           ctx.beginPath();
-          ctx.arc(cx, lineY, r + 5, 0, Math.PI * 2);
+          ctx.arc(cx, lineY, glowR, 0, Math.PI * 2);
           ctx.fill();
         }
+        // Thin dark rim keeps adjacent / overlapping same-class markers distinct.
+        ctx.fillStyle = "rgba(15,18,24,0.85)";
+        roundRect(cx - r - 1, lineY - r - 1, 2 * r + 2, 2 * r + 2, (r + 1) * 0.55);
+        ctx.fill();
         ctx.fillStyle = color;
         roundRect(cx - r, lineY - r, 2 * r, 2 * r, r * 0.55);
         ctx.fill();
       };
 
+      // At small widths shrink field markers so the pack stays readable.
+      const fieldR = Math.max(4, Math.min(5, span / 90));
+
       for (const c of slow?.cars ?? []) {
-        if (c.isPlayer || c.carIdx === playerIdx || c.lapDistPct == null) continue;
+        if (c.isPlayer || c.carIdx === playerIdx) continue;
+        // Skip garaged cars (not in world): real iRacing reports lapDistPct === -1
+        // for these, which would otherwise stack them on the start/finish post.
+        if (c.inWorld === false || c.lapDistPct == null || c.lapDistPct < 0) continue;
         const color = config.classColors ? classColorOf(cmap, c.carClassId) : "#e7ebf2";
-        marker(c.lapDistPct, color, 5, false);
+        marker(c.lapDistPct, color, fieldR, false);
       }
 
       const pPct =
         store.latestFast?.lapDistPct ??
         slow?.cars.find((c) => c.isPlayer || c.carIdx === playerIdx)?.lapDistPct ??
         null;
-      if (pPct != null) marker(pPct, t.accent, 7, true);
+      if (pPct != null) marker(pPct, t.accent, playerR, true);
 
       raf = requestAnimationFrame(draw);
     };
@@ -145,21 +166,21 @@ function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: "8px 12px 9px", boxSizing: "border-box" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-        <span style={{ fontWeight: 700, fontSize: "0.82em", letterSpacing: "0.1em" }}>TRACK ORDER</span>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 11 }}>
-          {legend.map((c) => (
-            <span key={c.name}>{legendDot(c.name, c.color)}</span>
-          ))}
-        </div>
+      <div style={{ marginBottom: 5 }}>
+        <WidgetTitle
+          title="Track Order"
+          theme={theme}
+          right={
+            <div style={{ display: "flex", gap: 11 }}>
+              {legend.map((c) => (
+                <span key={c.name}>{legendDot(c.name, c.color)}</span>
+              ))}
+            </div>
+          }
+        />
       </div>
       <div style={{ flex: 1, minHeight: 0, position: "relative", background: "rgba(255,255,255,0.03)", borderRadius: 11, overflow: "hidden" }}>
         <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontWeight: 600, fontSize: "0.56em", letterSpacing: "0.16em", color: t.textDim2 }}>
-        <span>S/F</span>
-        <span>SECTOR 1 · 2 · 3</span>
-        <span>S/F</span>
       </div>
     </div>
   );

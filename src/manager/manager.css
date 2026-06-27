@@ -146,6 +146,12 @@
   padding: 22px 26px 32px;
 }
 
+/* Settings is a single column of cards; cap its width so rows don't stretch
+   across a wide window (which floats toggles/values far from their labels). */
+.settings-page {
+  max-width: 860px;
+}
+
 /* ---------- page header ---------- */
 .page-head {
   display: flex;
@@ -365,7 +371,7 @@
   padding: 16px 18px;
 }
 .card + .card {
-  margin-top: 14px;
+  margin-top: 16px;
 }
 .card-title {
   font-size: 13px;
@@ -374,6 +380,16 @@
   text-transform: uppercase;
   color: var(--dim);
   margin-bottom: 12px;
+}
+/* Descriptive paragraph directly under a card title (replaces ad-hoc negative
+   margins): sits tight to the title, with clear space before the first field. */
+.card-title + .card-desc {
+  margin: -4px 0 14px;
+}
+.card-desc {
+  color: var(--dim);
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 /* ---------- widgets page ---------- */
@@ -545,9 +561,21 @@
   align-items: center;
   gap: 12px;
   min-height: 34px;
+  /* Even vertical breathing room so the divider between fields is centered in
+     the gap rather than sitting flush against the row above/below it. */
+  padding: 9px 0;
 }
 .field + .field {
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+/* First/last field hug the card's own padding (the title/description already
+   provide the top gap, and the card padding provides the bottom). */
+.card-title + .field,
+.card-desc + .field {
+  padding-top: 0;
+}
+.card > .field:last-child {
+  padding-bottom: 0;
 }
 .field-label {
   flex: 0 0 130px;
@@ -954,7 +982,10 @@ input.input::placeholder {
 
 /* ---------- live widget preview ---------- */
 .wp-scaler {
-  position: relative;
+  /* Intentionally unpositioned: the screen-effect layer inside it is absolute and
+     must attach to the preview stage (its positioned ancestor), not the scaler,
+     so edge effects span the simulated screen rather than the widget panel. */
+  position: static;
 }
 .wp-panel {
   box-sizing: border-box;
@@ -1005,6 +1036,8 @@ input.input::placeholder {
   border-bottom: 1px solid var(--border);
 }
 .preview-stage {
+  position: relative;
+  overflow: hidden;
   display: grid;
   place-items: center;
   padding: 32px;
@@ -1111,10 +1144,13 @@ input.input::placeholder {
 }
 .wcard-preview {
   position: relative;
-  height: 162px;
+  /* Squarer box (was a short 162px strip) so tall widgets have headroom and don't
+     crowd the foot/toggle. Height derives from the card width via the ratio. */
+  aspect-ratio: 4 / 3;
+  min-height: 200px;
   display: grid;
   place-items: center;
-  padding: 10px;
+  padding: 12px;
   cursor: pointer;
   overflow: hidden;
   background:

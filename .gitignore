@@ -6,6 +6,16 @@ Cargo.lock.orig
 /node_modules
 /dist
 
+# Widget screenshot captures (re-generable via `npm run shoot-widgets`)
+/widget-shots
+
+# Telemetry session capture recordings (record/replay harness output — multi-GB,
+# re-derivable; never commit).
+/captures
+
+# Backup artifacts.
+*.bak
+
 # Tauri generated schemas/artifacts
 /src-tauri/gen
 /src-tauri/target
@@ -20,6 +30,9 @@ Cargo.lock.orig
 /scripts/iracing-data
 # Lovely-track-data fetch cache (re-derivable from the public lovely-track-data repo).
 /scripts/.lovely-cache
+# Lovely-car-data fetch cache (re-derivable from the public lovely-car-data repo;
+# the baked src/widgets/data/carLeds.json is committed, this intermediate is not).
+/scripts/.lovely-car-cache
 
 # The 32MB pre-sampled dataset (assets/tracks.json) is a one-time fallback for
 # `fetch-track-maps -- --from-dataset`; re-derivable and too large to track.

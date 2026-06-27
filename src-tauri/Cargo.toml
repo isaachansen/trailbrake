@@ -18,9 +18,18 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 serde = { workspace = true }
 overlay-core = { workspace = true }
+# VR compositor. Lightweight no-op stub by default; the real OpenVR/OpenXR
+# backends are pulled in only with the `vr` feature (Windows + LLVM, see below).
+vr-overlay = { workspace = true }
 # Sync HTTP client for the background track-map bundle fetch at startup.
 # Tiny, no async runtime — fits the std::thread pattern used by spawn_bridge.
 ureq = "2"
+
+[features]
+# Build the real VR backends (OpenVR + OpenXR). Requires Windows, LLVM/libclang
+# (ovr_overlay -> autocxx), and the Windows SDK:
+#   cargo tauri build --features vr      (or: cargo run --features vr)
+vr = ["vr-overlay/vr"]
 
 [target.'cfg(windows)'.dependencies]
 iracing-connector = { workspace = true }

@@ -9,6 +9,7 @@
 import { useSlow } from "../store/hooks";
 import { useSettings } from "../store/appSettings";
 import { fuelValue, fuelLabel } from "./format";
+import { WidgetTitle } from "./WidgetTitle";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface FuelSessionConfig {
@@ -63,46 +64,54 @@ function FuelSession({ theme, config }: BaseWidgetProps<FuelSessionConfig>) {
   const marginDisp = fuelValue(marginL, units);
 
   const cell = (label: string, value: React.ReactNode, color: string) => (
-    <div style={{ flex: 1, textAlign: "center", padding: "6px 2px", background: t.cell, borderRadius: 9, minWidth: 0 }}>
-      <div style={{ fontSize: "0.58em", fontWeight: 600, letterSpacing: "0.1em", color: t.textDim2 }}>{label}</div>
-      <div style={{ fontFamily: mono, fontWeight: 700, fontSize: "1.05em", color }}>{value}</div>
+    <div style={{ flex: 1, minWidth: 0, textAlign: "center", padding: "6px 2px", background: t.cell, borderRadius: 9, display: "flex", flexDirection: "column", justifyContent: "center", gap: 3 }}>
+      <div style={{ fontFamily: theme.font.label, fontSize: "0.58em", fontWeight: 600, letterSpacing: "0.12em", color: t.textDim2 }}>{label}</div>
+      <div style={{ fontFamily: mono, fontWeight: 700, fontSize: "1.05em", lineHeight: 1, color }}>{value}</div>
     </div>
   );
   const big = (v: React.ReactNode, suffix?: React.ReactNode) => (
-    <span style={{ color: "#fff" }}>
+    <span style={{ color: t.text }}>
       {v}
       {suffix != null && <span style={{ fontSize: "0.7em", color: t.textDim }}>{suffix}</span>}
     </span>
   );
 
   return (
-    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: "8px 12px 10px", boxSizing: "border-box", overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
-        <span style={{ fontWeight: 700, fontSize: "0.82em", letterSpacing: "0.1em" }}>FUEL &amp; SESSION</span>
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", gap: theme.space.md, color: t.text, padding: "8px 12px 10px", boxSizing: "border-box", overflow: "hidden" }}>
+      <div style={{ flex: "0 0 auto" }}>
+        <WidgetTitle title="Fuel & Session" theme={theme} />
       </div>
 
       {config.showSession && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 10 }}>
-          {cell("POSITION", big(slow?.position != null ? `P${slow.position}` : "--", fieldSize ? `/${fieldSize}` : null), "#fff")}
-          {cell("LAP", big(slow?.lap ?? "--", totalLap ? `/${totalLap}` : null), "#fff")}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: theme.space.sm, flex: "1 1 0", minHeight: 0 }}>
+          {cell("POSITION", big(slow?.position != null ? `P${slow.position}` : "--", fieldSize ? `/${fieldSize}` : null), t.text)}
+          {cell("LAP", big(slow?.lap ?? "--", totalLap ? `/${totalLap}` : null), t.text)}
           {cell("TIME LEFT", fmtClock(slow?.timeRemainingS), t.amber)}
         </div>
       )}
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <span style={{ fontWeight: 600, fontSize: "0.7em", letterSpacing: "0.1em", color: t.textDim }}>FUEL REMAINING</span>
-        <span style={{ fontFamily: mono, fontWeight: 700, fontSize: "1.05em", color: "#fff" }}>
-          {fuelDisp != null ? fuelDisp.toFixed(1) : "--"} <span style={{ fontSize: "0.68em", color: t.textDim }}>{fLabel}</span>
-        </span>
-      </div>
-      <div style={{ marginTop: 7, height: 9, borderRadius: 5, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
-        <div style={{ height: "100%", width: `${barPct}%`, background: `linear-gradient(90deg, ${t.amber}, #ffd98a)`, borderRadius: 5, transition: "width 0.4s linear" }} />
+      <div style={{ flex: "1 1 0", minHeight: 0, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <span style={{ fontFamily: theme.font.label, fontWeight: 600, fontSize: "0.7em", letterSpacing: "0.1em", color: t.textDim }}>FUEL REMAINING</span>
+          <span style={{ fontFamily: mono, fontWeight: 700, fontSize: "1.05em", color: t.text }}>
+            {fuelDisp != null ? fuelDisp.toFixed(1) : "--"} <span style={{ fontSize: "0.68em", color: t.textDim }}>{fLabel}</span>
+          </span>
+        </div>
+        <div style={{ marginTop: 7, height: "0.65em", borderRadius: 5, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${barPct}%`, background: `linear-gradient(90deg, ${t.amber}, #ffd98a)`, borderRadius: 5, transition: "width 0.4s linear" }} />
+        </div>
       </div>
 
       {config.showStrategy && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginTop: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: theme.space.sm, flex: "1 1 0", minHeight: 0 }}>
           {cell("PER LAP", perLapDisp != null ? big(perLapDisp.toFixed(2), fLabel) : "--", t.text)}
-          {cell("LAPS LEFT", lapsLeftInTank != null ? String(lapsLeftInTank) : "--", lapsLeftInTank != null && lapsToFinish != null && lapsLeftInTank >= lapsToFinish ? t.gain : t.loss)}
+          {cell(
+            "LAPS LEFT",
+            lapsLeftInTank != null ? String(lapsLeftInTank) : "--",
+            // Only warn (red) / reassure (green) when we know the finish target;
+            // without it, "laps left in the tank" is just a neutral fact.
+            lapsLeftInTank == null || lapsToFinish == null ? t.text : lapsLeftInTank >= lapsToFinish ? t.gain : t.loss
+          )}
           {cell(
             "TO FIN",
             marginDisp != null ? big(`${marginDisp >= 0 ? "+" : ""}${marginDisp.toFixed(1)}`, fLabel) : "--",

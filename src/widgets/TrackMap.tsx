@@ -1,7 +1,16 @@
 // Track map: the circuit outline with every car as a dot at its lap-distance
 // position, the player highlighted. The outline comes from the sim-provided
 // normalized centerline (`slow.trackPath`); car dots are placed by mapping each
-// `lapDistPct` to a point along that centerline's arc length.
+// `lapDistPct` to the corresponding point along that centerline.
+//
+// The baked centerline is sampled so that point index i corresponds to
+// lap-distance fraction i/N (index 0 = start/finish), i.e. the points are spaced
+// by lapDistPct. We therefore map a car's `lapDistPct` to its point by INDEX
+// fraction (interpolating between `pts[floor(p*N)]` and the next point), not by
+// cumulative geometric arc length. For the vast majority of tracks the baked
+// points are also near-uniform by arc length, so the two agree to sub-pixel; but
+// index mapping is the correct one and stays right on tracks whose geometry has
+// long chords/discontinuities (where arc-length would misplace cars).
 //
 // Renders on a rAF loop so the player's own dot rides the fast-path lap distance
 // (smooth) while the rest update at the slow rate. Hidden unless the sim
@@ -10,6 +19,8 @@
 import { useEffect, useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
 import { classColorMap, classColorOf } from "./raceColors";
+import { WidgetTitle } from "./WidgetTitle";
+import { classifySessionType } from "./contract";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 import type { SlowSample } from "../store/types";
 
@@ -17,42 +28,37 @@ export interface TrackMapConfig {
   showField: boolean;
   classColors: boolean;
   showTurns: boolean;
+  /** In qualifying, show only the player dot (solo hot lap — no field). */
+  soloInQualy: boolean;
 }
 
-const defaultConfig: TrackMapConfig = { showField: true, classColors: false, showTurns: true };
+const defaultConfig: TrackMapConfig = { showField: true, classColors: false, showTurns: true, soloInQualy: true };
 
-/** Precomputed cumulative arc length for a centerline, for pct→point mapping. */
+/** A centerline whose point index i maps to lap-distance fraction i/N. */
 interface PathGeom {
   pts: [number, number][];
-  cum: number[];
-  total: number;
 }
 
 function buildGeom(pts: [number, number][]): PathGeom {
-  const cum = [0];
-  let total = 0;
-  for (let i = 0; i < pts.length; i++) {
-    const a = pts[i];
-    const b = pts[(i + 1) % pts.length];
-    total += Math.hypot(b[0] - a[0], b[1] - a[1]);
-    cum.push(total);
-  }
-  return { pts, cum, total };
+  return { pts };
 }
 
-/** Point on the centerline at fraction `frac` (0..1) of the lap. */
+/**
+ * Point on the centerline at lap-distance fraction `frac` (0..1).
+ *
+ * The baked points are spaced by lapDistPct (index i ≈ fraction i/N, index 0 at
+ * start/finish), so we map the fraction directly to an index and interpolate to
+ * the next point — closing the loop back to index 0 at frac → 1.
+ */
 function posAt(g: PathGeom, frac: number): [number, number] {
-  const d = (((frac % 1) + 1) % 1) * g.total;
-  for (let i = 0; i < g.cum.length - 1; i++) {
-    if (d <= g.cum[i + 1]) {
-      const seg = g.cum[i + 1] - g.cum[i] || 1;
-      const u = (d - g.cum[i]) / seg;
-      const a = g.pts[i];
-      const b = g.pts[(i + 1) % g.pts.length];
-      return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
-    }
-  }
-  return g.pts[0];
+  const n = g.pts.length;
+  if (n === 0) return [0, 0];
+  const f = ((((frac % 1) + 1) % 1)) * n;
+  const i = Math.floor(f) % n;
+  const u = f - Math.floor(f);
+  const a = g.pts[i];
+  const b = g.pts[(i + 1) % n];
+  return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
 }
 
 function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
@@ -177,11 +183,16 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
         }
       }
 
-      const dot = (p: [number, number], rad: number, color: string, glow?: string) => {
+      const dot = (
+        p: [number, number],
+        rad: number,
+        color: string,
+        opts?: { glow?: string; outline?: string; outlineWidth?: number },
+      ) => {
         const x = MX(p);
         const y = MY(p);
-        if (glow) {
-          ctx.fillStyle = glow;
+        if (opts?.glow) {
+          ctx.fillStyle = opts.glow;
           ctx.beginPath();
           ctx.arc(x, y, rad + 4, 0, Math.PI * 2);
           ctx.fill();
@@ -190,13 +201,29 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
         ctx.beginPath();
         ctx.arc(x, y, rad, 0, Math.PI * 2);
         ctx.fill();
+        // Dark contrasting ring so the dot reads against both the white track
+        // line and the dark background.
+        if (opts?.outline) {
+          ctx.lineWidth = opts.outlineWidth ?? 1.4;
+          ctx.strokeStyle = opts.outline;
+          ctx.beginPath();
+          ctx.arc(x, y, rad, 0, Math.PI * 2);
+          ctx.stroke();
+        }
       };
 
       const playerIdx = slow?.playerCarIdx ?? null;
       const cmap = classColorMap(slow?.cars ?? []);
-      if (config.showField) {
+      // In qualifying you run a solo hot lap — drop the field so only your own dot
+      // shows (the player dot is drawn separately, below).
+      const soloQualy = config.soloInQualy && classifySessionType(slow?.sessionType) === "qualy";
+      if (config.showField && !soloQualy) {
         for (const c of slow?.cars ?? []) {
-          if (c.isPlayer || c.carIdx === playerIdx || c.lapDistPct == null) continue;
+          if (c.isPlayer || c.carIdx === playerIdx) continue;
+          // Skip cars that aren't in the world (garaged): real iRacing reports
+          // these with lapDistPct === -1, which would otherwise pile every
+          // garaged car onto the start/finish line.
+          if (c.inWorld === false || c.lapDistPct == null || c.lapDistPct < 0) continue;
           const target = ((c.lapDistPct % 1) + 1) % 1;
           // Ease the displayed fraction toward the target along the shorter arc
           // (so a lap wrap from .99→.01 moves forward, not backward).
@@ -208,14 +235,22 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
             shown = ((prev + delta * ease) % 1 + 1) % 1;
           }
           animPct.set(c.carIdx, shown);
-          const color = config.classColors ? classColorOf(cmap, c.carClassId) : "#e7ebf2";
-          dot(posAt(g, shown), 3.2, color);
+          // Default (class colors off): a saturated amber that stands clearly
+          // apart from the player's accent and the white track line.
+          const color = config.classColors ? classColorOf(cmap, c.carClassId) : "#ffc24d";
+          dot(posAt(g, shown), 4.3, color, { outline: "rgba(8,11,18,0.92)", outlineWidth: 1.5 });
         }
       }
 
-      // Player dot rides the fast-path lap distance for smoothness.
+      // Player dot rides the fast-path lap distance for smoothness — larger,
+      // accent-colored, with a glow and dark ring so the user finds it instantly.
       const pPct = store.latestFast?.lapDistPct ?? findPlayerPct(slow, playerIdx);
-      if (pPct != null) dot(posAt(g, pPct), 5, t.accent, "rgba(255,45,142,0.4)");
+      if (pPct != null)
+        dot(posAt(g, pPct), 5.5, t.accent, {
+          glow: "rgba(255,45,142,0.4)",
+          outline: "rgba(8,11,18,0.92)",
+          outlineWidth: 1.6,
+        });
 
       raf = requestAnimationFrame(draw);
     };
@@ -228,9 +263,12 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: "8px 11px 11px", boxSizing: "border-box" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-        <span style={{ fontWeight: 700, fontSize: "0.82em", letterSpacing: "0.1em" }}>TRACK MAP</span>
-        <span ref={nameRef} style={{ marginLeft: "auto", fontWeight: 600, fontSize: "0.62em", letterSpacing: "0.06em", color: t.textDim2 }} />
+      <div style={{ marginBottom: 6 }}>
+        <WidgetTitle
+          title="Track Map"
+          theme={theme}
+          right={<span ref={nameRef} style={{ fontFamily: theme.font.label, fontWeight: 600, fontSize: "0.62em", letterSpacing: "0.06em", color: t.textDim2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, textAlign: "right" }} />}
+        />
       </div>
       <div style={{ flex: 1, minHeight: 0, position: "relative", background: "rgba(255,255,255,0.03)", borderRadius: 11, overflow: "hidden" }}>
         <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
@@ -251,6 +289,7 @@ export const trackMapDef: WidgetDefinition<TrackMapConfig> = {
     { key: "showField", label: "Show field", type: "boolean" },
     { key: "classColors", label: "Class colors", type: "boolean" },
     { key: "showTurns", label: "Corner numbers", type: "boolean" },
+    { key: "soloInQualy", label: "Solo in qualy", type: "boolean" },
   ],
   Component: TrackMap,
 };

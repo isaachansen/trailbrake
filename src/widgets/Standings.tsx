@@ -11,6 +11,7 @@ import { fmtGap, fmtLapTime, hexToRgba } from "./format";
 import { flagOf, parseLicense, classColorMap, classColorOf } from "./raceColors";
 import { LicenseBadge } from "./LicenseBadge";
 import { TyreBadge } from "./TyreBadge";
+import { PitBadge } from "./PitBadge";
 import { CarIcon, carIconFor, isWideIcon } from "./carIcons";
 import type { CarEntry } from "../store/types";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
@@ -96,7 +97,7 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
     return () => ro.disconnect();
   }, [config.multiclass]);
 
-  let cars = [...(slow?.cars ?? [])].sort((a, b) => (a.position ?? 999) - (b.position ?? 999));
+  let cars = [...(slow?.cars ?? [])].filter((c) => c.inWorld !== false).sort((a, b) => (a.position ?? 999) - (b.position ?? 999));
   const playerClass = cars.find((c) => c.isPlayer || c.carIdx === playerIdx)?.carClassId ?? null;
   if (config.myClassOnly && playerClass != null) cars = cars.filter((c) => c.carClassId === playerClass);
 
@@ -184,7 +185,14 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
     });
   cols.push({
     id: "name", w: "minmax(6em,2fr)", head: "DRIVER", align: "l",
-    cell: (x) => <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: x.isPlayer ? "#fff" : t.text }}>{x.car.driverName ?? `Car ${x.car.carIdx}`}</span>,
+    cell: (x) => (
+      <span style={{ display: "flex", alignItems: "center", gap: "0.45em", overflow: "hidden" }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: x.isPlayer ? "#fff" : t.text }}>
+          {x.car.driverName ?? `Car ${x.car.carIdx}`}
+        </span>
+        {x.car.onPitRoad === true && <PitBadge color={t.amber} />}
+      </span>
+    ),
   });
   if (has.lic)
     cols.push({
@@ -203,14 +211,18 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
     });
   if (has.ir)
     cols.push({
-      id: "ir", w: "minmax(3.7em,1fr)", head: "iR", align: "r",
+      id: "ir", w: "minmax(3.9em,1fr)", head: "iR", align: "r",
       cell: (x) => {
         const ir = x.car.irating;
         const d = x.car.iratingDelta;
+        // Two fixed slots so the iR value's right edge stays put across rows
+        // regardless of how wide the delta is — the digits read as a clean column.
         return (
-          <span style={{ fontFamily: mono, fontVariantNumeric: "tabular-nums", textAlign: "right", color: t.text }}>
-            {ir != null ? (ir / 1000).toFixed(1) + "k" : "--"}
-            {d != null && <span style={{ fontSize: "0.72em", marginLeft: 2, color: d >= 0 ? t.gain : t.loss }}>{d >= 0 ? "▲" : "▼"}{Math.abs(d)}</span>}
+          <span style={{ display: "flex", justifyContent: "flex-end", alignItems: "baseline", fontFamily: mono, fontVariantNumeric: "tabular-nums", color: t.text }}>
+            <span>{ir != null ? (ir / 1000).toFixed(1) + "k" : "--"}</span>
+            <span style={{ display: "inline-block", width: "1.9em", textAlign: "left", fontSize: "0.72em", marginLeft: 3, color: d == null ? "transparent" : d >= 0 ? t.gain : t.loss }}>
+              {d != null ? `${d >= 0 ? "▲" : "▼"}${Math.abs(d)}` : ""}
+            </span>
           </span>
         );
       },
@@ -313,7 +325,7 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
   const header = (
     <div style={{ display: "grid", gridTemplateColumns: template, gap: COLGAP, alignItems: "center", height: "1.6em", padding: `0 ${PADX}` }}>
       {cols.map((c) => (
-        <span key={c.id} style={{ textAlign: ta(c.align), color: t.textDim, fontSize: "0.7em", fontWeight: 700, letterSpacing: "0.08em", overflow: "hidden", whiteSpace: "nowrap" }}>{c.head}</span>
+        <span key={c.id} style={{ fontFamily: theme.font.label, textAlign: ta(c.align), color: t.textDim, fontSize: "0.7em", fontWeight: 700, letterSpacing: "0.08em", overflow: "hidden", whiteSpace: "nowrap" }}>{c.head}</span>
       ))}
     </div>
   );
@@ -325,8 +337,8 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
         <div key={g.id ?? "all"}>
           {config.multiclass && g.name && (
             <div style={{ display: "flex", alignItems: "center", gap: 7, padding: `0 ${PADX}`, margin: "7px 0 3px", height: "1.3em", boxSizing: "content-box" }}>
-              <span style={{ fontWeight: 700, fontSize: "0.74em", letterSpacing: "0.04em", color: "#0a0b0e", padding: "1px 7px", borderRadius: 5, background: classColorOf(ccol, g.id) }}>{g.name}</span>
-              <span style={{ marginLeft: "auto", fontSize: "0.68em", color: t.text, letterSpacing: "0.06em", fontWeight: 800, fontVariantNumeric: "tabular-nums", opacity: 0.92 }}>
+              <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.74em", letterSpacing: "0.04em", color: "#0a0b0e", padding: "1px 7px", borderRadius: 5, background: classColorOf(ccol, g.id) }}>{g.name}</span>
+              <span style={{ fontFamily: theme.font.label, marginLeft: "auto", fontSize: "0.68em", color: t.text, letterSpacing: "0.06em", fontWeight: 800, fontVariantNumeric: "tabular-nums", opacity: 0.92 }}>
                 {g.display.length < g.rows.length ? `${g.display.length} OF ${g.rows.length}` : `${g.rows.length} CARS`}
               </span>
             </div>
@@ -347,6 +359,8 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
                 boxShadow: x.isPlayer ? `inset 0 0 0 1.5px ${t.accent}` : "none",
                 color: x.isPlayer ? "#fff" : t.textDim,
                 fontWeight: x.isPlayer ? 800 : 500,
+                // In the pits → dim the row so it reads as "out of the running".
+                opacity: x.car.onPitRoad === true && !x.isPlayer ? 0.72 : 1,
               }}
             >
               {cols.map((c) => <div key={c.id} style={{ minWidth: 0, textAlign: ta(c.align) }}>{c.cell(x)}</div>)}

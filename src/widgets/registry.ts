@@ -17,6 +17,20 @@ import { pitBoardDef } from "./PitBoard";
 import { raceControlDef } from "./RaceControl";
 import { chatDef } from "./Chat";
 import { garageCoverDef } from "./GarageCover";
+import { weatherDef } from "./Weather";
+import { flagDef } from "./Flag";
+import { lapTimerDef } from "./LapTimer";
+import { sectorDeltaDef } from "./SectorDelta";
+import { rejoinDef } from "./RejoinIndicator";
+import { slowCarAheadDef } from "./SlowCarAhead";
+import { cornerNameDef } from "./CornerName";
+import { launchAssistDef } from "./LaunchAssist";
+import { tachometerDef } from "./Tachometer";
+import { heartRateDef } from "./HeartRate";
+import { highlightedDriverDef } from "./HighlightedDriver";
+import { pitlaneHelperDef } from "./PitlaneHelper";
+import { telemetryInspectorDef } from "./TelemetryInspector";
+import { setupComparisonDef } from "./SetupComparison";
 
 const DEFS: WidgetDefinition<any>[] = [
   standingsDef,
@@ -34,6 +48,20 @@ const DEFS: WidgetDefinition<any>[] = [
   raceControlDef,
   chatDef,
   garageCoverDef,
+  weatherDef,
+  flagDef,
+  lapTimerDef,
+  sectorDeltaDef,
+  rejoinDef,
+  slowCarAheadDef,
+  cornerNameDef,
+  launchAssistDef,
+  tachometerDef,
+  heartRateDef,
+  highlightedDriverDef,
+  pitlaneHelperDef,
+  telemetryInspectorDef,
+  setupComparisonDef,
 ];
 
 const BY_ID = new Map<string, WidgetDefinition<any>>(DEFS.map((d) => [d.id, d]));

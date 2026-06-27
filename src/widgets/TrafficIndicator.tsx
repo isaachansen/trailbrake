@@ -28,7 +28,7 @@ function TrafficIndicator({ theme, config }: BaseWidgetProps<TrafficConfig>) {
   // Nearest neighbour within range.
   let near: { idx: number; gap: number; cls: string; clsColor: string } | null = null;
   for (const c of slow?.cars ?? []) {
-    if (c.isPlayer || c.carIdx === playerIdx || c.gapToPlayerS == null) continue;
+    if (c.inWorld === false || c.isPlayer || c.carIdx === playerIdx || c.gapToPlayerS == null) continue;
     const g = c.gapToPlayerS;
     if (Math.abs(g) > range) continue;
     if (!near || Math.abs(g) < Math.abs(near.gap)) {
@@ -55,15 +55,15 @@ function TrafficIndicator({ theme, config }: BaseWidgetProps<TrafficConfig>) {
   const barPct = near == null ? 0 : Math.max(4, Math.min(100, (1 - Math.abs(near.gap) / range) * 100));
 
   return (
-    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", justifyContent: "center", color: t.text, padding: "13px 15px", boxSizing: "border-box", overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 13 }}>
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", justifyContent: "center", gap: theme.space.lg, color: t.text, padding: "11px 14px", boxSizing: "border-box", overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 13, minHeight: 0 }}>
         <div style={{ fontWeight: 700, fontSize: "2em", lineHeight: 1, color: accent, width: "1.1em", textAlign: "center" }}>{arrow}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-            <span style={{ fontWeight: 700, fontSize: "0.68em", letterSpacing: "0.04em", color: "#0a0b0e", background: near ? near.clsColor : "#565c68", padding: "1px 7px", borderRadius: 5 }}>{near?.cls || "—"}</span>
-            <span style={{ fontWeight: 700, fontSize: "0.82em", letterSpacing: "0.05em", color: "#fff", whiteSpace: "nowrap" }}>{msg}</span>
+            <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.68em", letterSpacing: "0.04em", color: "#0a0b0e", background: near ? near.clsColor : "#565c68", padding: "1px 7px", borderRadius: 5 }}>{near?.cls || "—"}</span>
+            <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.82em", letterSpacing: "0.05em", color: "#fff", whiteSpace: "nowrap" }}>{msg}</span>
           </div>
-          <div style={{ marginTop: 5, fontWeight: 600, fontSize: "0.62em", letterSpacing: "0.08em", color: t.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          <div style={{ fontFamily: theme.font.label, marginTop: 5, fontWeight: 600, fontSize: "0.62em", letterSpacing: "0.08em", color: t.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {near ? (
               <>
                 {closing ? "CLOSING " : "GAP "}
@@ -77,7 +77,7 @@ function TrafficIndicator({ theme, config }: BaseWidgetProps<TrafficConfig>) {
           </div>
         </div>
       </div>
-      <div style={{ marginTop: 10, height: 5, borderRadius: 3, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+      <div style={{ flex: "0 0 auto", height: 5, borderRadius: 3, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
         <div style={{ height: "100%", width: `${barPct}%`, background: accent, borderRadius: 3, transition: "width 0.2s linear" }} />
       </div>
     </div>

@@ -33,8 +33,12 @@ export interface Theme {
     edit: string;
   };
   font: {
-    /** UI / labels / large numerics. */
+    /** UI / large numerics. */
     family: string;
+    /** Uppercase eyebrow/header/unit labels (standings headers, track-map name,
+     *  widget titles, unit captions). Wider than the condensed body font so small
+     *  tracked-out caps stay legible. */
+    label: string;
     /** Telemetry digits (gaps, deltas, lap times, %). */
     mono: string;
     /** Base size in px; widgets scale relative to this. */
@@ -44,6 +48,19 @@ export interface Theme {
   /** CSS backdrop-filter for glass panels (the "surface" style). */
   panelBlur: string;
   panelShadow: string;
+  // Canonical spacing values widgets should migrate to. Most widgets currently
+  // hand-roll their own padding/gaps inline; consume these tokens instead so
+  // spacing stays consistent and restylable from one place.
+  /** Pixel spacing scale for gaps, margins, and inner padding. */
+  space: {
+    xs: number;
+    sm: number;
+    md: number;
+    lg: number;
+    xl: number;
+  };
+  /** Standard widget outer padding (CSS shorthand). */
+  widgetPad: string;
 }
 
 const PINK = "#ff2d8e";
@@ -55,8 +72,12 @@ export const defaultTheme: Theme = {
     cell: "rgba(255, 255, 255, 0.04)",
     playerRow: "rgba(255, 45, 142, 0.16)",
     text: "#eef1f5",
-    textDim: "#8a909c",
-    textDim2: "#565c68",
+    // Brightened from #8a909c / #565c68 for legibility: the dim uppercase labels
+    // (standings headers, track-map name, unit/eyebrow labels) were too low-contrast
+    // in condensed caps. Only the colors moved — sizes/spacing are untouched so
+    // layout is unchanged. Hierarchy text > textDim > textDim2 is preserved.
+    textDim: "#a8aeb9",
+    textDim2: "#828893",
     throttle: "#2fe08a", // green
     brake: "#ff495e", // red
     clutch: "#37d4ea", // cyan
@@ -71,10 +92,13 @@ export const defaultTheme: Theme = {
   },
   font: {
     family: '"Saira Condensed", "Segoe UI", system-ui, sans-serif',
+    label: '"Saira SemiCondensed", "Saira Condensed", "Segoe UI", system-ui, sans-serif',
     mono: '"JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace',
     sizeBase: 14,
   },
   radius: 16,
   panelBlur: "blur(20px) saturate(1.25)",
   panelShadow: "0 18px 50px rgba(0, 0, 0, 0.5)",
+  space: { xs: 4, sm: 6, md: 8, lg: 12, xl: 16 },
+  widgetPad: "8px 12px",
 };

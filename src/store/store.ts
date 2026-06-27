@@ -18,6 +18,43 @@ const RATE_WINDOW_MS = 1000;
 
 type Listener = () => void;
 
+/** Largest plausible finishing position; anything beyond is a sentinel, not a place. */
+const MAX_SANE_POSITION = 1000;
+
+/**
+ * iRacing reports "no position" as `-1`, which arrives over the `u32` wire as
+ * `4294967295` (u32::MAX). Older replay captures baked that value in, so normalize
+ * any out-of-range position to `null` — doing it here at the single slow-ingest
+ * choke point fixes every widget at once (Standings, Relative, …).
+ */
+function sanePos(n: number | null): number | null {
+  return n == null || n <= 0 || n > MAX_SANE_POSITION ? null : n;
+}
+
+/**
+ * iRacing's `SessionLapsRemainEx` returns 32767 for a timed/unlimited session and
+ * `SessionTimeRemain` returns -1 (or ~a week) — sentinels, not real values. The
+ * connector now maps these to null, but captures recorded before that fix have
+ * the raw sentinels baked in, so normalize on replay too.
+ */
+const LAPS_SENTINEL = 32767;
+const TIME_SENTINEL_MAX = 604800; // one week (s) — unlimited sessions report this
+
+function sanitizeSlow(s: SlowSample): void {
+  s.position = sanePos(s.position);
+  s.classPosition = sanePos(s.classPosition);
+  for (const c of s.cars) {
+    c.position = sanePos(c.position);
+    c.classPosition = sanePos(c.classPosition);
+  }
+  if (s.lapsRemaining != null && (s.lapsRemaining < 0 || s.lapsRemaining >= LAPS_SENTINEL)) {
+    s.lapsRemaining = null;
+  }
+  if (s.timeRemainingS != null && (s.timeRemainingS < 0 || s.timeRemainingS >= TIME_SENTINEL_MAX)) {
+    s.timeRemainingS = null;
+  }
+}
+
 export class TelemetryStore {
   // --- fast path (read directly, not via React) ---
   latestFast: FastSample | null = null;
@@ -58,6 +95,7 @@ export class TelemetryStore {
   }
 
   ingestSlow(sample: SlowSample) {
+    sanitizeSlow(sample);
     this.slow = sample;
     this.slowListeners.forEach((l) => l());
   }

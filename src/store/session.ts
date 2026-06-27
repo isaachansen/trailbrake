@@ -45,3 +45,37 @@ export const statusStore = {
 export function useStatus(): OverlayStatus {
   return useSyncExternalStore(statusStore.subscribe, statusStore.get);
 }
+
+// --- VR compositor status, mirrored from `overlay://vr-status` ---
+
+export interface VrStatus {
+  /** A VR backend is compiled in and a runtime is reachable. */
+  available: boolean;
+  /** The compositor is running and pushing per-widget panels. */
+  active: boolean;
+  /** Backend name ("OpenVR" / "OpenXR" / "none"). */
+  backend: string;
+  /** Last status / error message for display. */
+  message: string;
+}
+
+let vrStatus: VrStatus = { available: false, active: false, backend: "none", message: "" };
+const vrListeners = new Set<() => void>();
+
+export const vrStatusStore = {
+  subscribe(l: () => void): () => void {
+    vrListeners.add(l);
+    return () => vrListeners.delete(l);
+  },
+  get(): VrStatus {
+    return vrStatus;
+  },
+  set(next: VrStatus) {
+    vrStatus = next;
+    vrListeners.forEach((l) => l());
+  },
+};
+
+export function useVrStatus(): VrStatus {
+  return useSyncExternalStore(vrStatusStore.subscribe, vrStatusStore.get);
+}

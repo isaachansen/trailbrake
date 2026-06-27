@@ -9,6 +9,7 @@
 
 import { useEffect, useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
+import { WidgetTitle } from "./WidgetTitle";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface RadarConfig {
@@ -125,29 +126,58 @@ function Radar({ theme, config }: BaseWidgetProps<RadarConfig>) {
         ctx.fillRect(w * 0.58, 0, w * 0.42, h);
       }
 
-      // Center reference line.
-      ctx.strokeStyle = "rgba(255,255,255,0.07)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(cx, 8);
-      ctx.lineTo(cx, h - 8);
-      ctx.stroke();
-
-      // Neighbours (only those within range).
       const carW = Math.max(10, w * 0.11);
       const carH = carW * 1.6;
+
+      // "Alongside" zone — the band level with the player where a neighbour is
+      // door-to-door. Drawn first so blips and lines sit on top of it.
+      const zoneTop = yOf(ALONGSIDE_M);
+      const zoneBot = yOf(-ALONGSIDE_M);
+      ctx.fillStyle = "rgba(255,255,255,0.05)";
+      ctx.fillRect(0, zoneTop, w, zoneBot - zoneTop);
+
+      // Range gridlines: a faint tick every ~4 m so the empty space reads as
+      // scale, not dead space. Works on light and dark via a mid-grey stroke.
+      ctx.strokeStyle = "rgba(128,128,128,0.22)";
+      ctx.lineWidth = 1;
+      const step = 4;
+      for (let m = step; m <= range; m += step) {
+        for (const yy of [yOf(m), yOf(-m)]) {
+          const py = Math.round(yy) + 0.5;
+          ctx.beginPath();
+          ctx.moveTo(8, py);
+          ctx.lineTo(w - 8, py);
+          ctx.stroke();
+        }
+      }
+
+      // Center reference line.
+      ctx.strokeStyle = "rgba(128,128,128,0.3)";
+      ctx.lineWidth = 1;
+      const pcx = Math.round(cx) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(pcx, 8);
+      ctx.lineTo(pcx, h - 8);
+      ctx.stroke();
+
+      // Neighbours (only those within range). A thin outline keeps the light
+      // car body legible on light backgrounds too.
       for (const b of shown.values()) {
         if (Math.abs(b.lon) > range + 3) continue;
         const x = xOf(b.lat);
         const y = yOf(b.lon);
-        ctx.fillStyle = Math.abs(b.lon) < ALONGSIDE_M ? t.loss : "#e7ebf2";
+        const alongside = Math.abs(b.lon) < ALONGSIDE_M;
         roundRect(x - carW / 2, y - carH / 2, carW, carH, 3);
+        ctx.fillStyle = alongside ? t.loss : "#e7ebf2";
         ctx.fill();
+        ctx.strokeStyle = "rgba(0,0,0,0.35)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
       }
 
-      // Player at center, with a soft halo.
-      ctx.fillStyle = "rgba(255,45,142,0.35)";
-      roundRect(cx - carW / 2 - 3, cy - carH / 2 - 3, carW + 6, carH + 6, 5);
+      // Player at center, with a soft accent halo.
+      ctx.fillStyle = "rgba(255,45,142,0.30)";
+      roundRect(cx - carW / 2 - 4, cy - carH / 2 - 4, carW + 8, carH + 8, 6);
       ctx.fill();
       ctx.fillStyle = t.accent;
       roundRect(cx - carW / 2, cy - carH / 2, carW, carH, 3);
@@ -164,8 +194,10 @@ function Radar({ theme, config }: BaseWidgetProps<RadarConfig>) {
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: "7px 9px 9px", boxSizing: "border-box" }}>
-      <div style={{ fontWeight: 700, fontSize: "0.78em", letterSpacing: "0.1em", marginBottom: 5 }}>RADAR</div>
-      <div style={{ flex: 1, minHeight: 0, position: "relative", background: "rgba(255,255,255,0.03)", borderRadius: 11, overflow: "hidden" }}>
+      <div style={{ marginBottom: 5 }}>
+        <WidgetTitle title="Radar" theme={theme} />
+      </div>
+      <div style={{ flex: 1, minHeight: 0, position: "relative", background: "rgba(255,255,255,0.03)", borderRadius: 12, overflow: "hidden" }}>
         <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
       </div>
     </div>

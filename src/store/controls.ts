@@ -7,7 +7,7 @@
 
 import { isTauri } from "./transport";
 import { editModeStore } from "./editMode";
-import { statusStore, type OverlayStatus } from "./session";
+import { statusStore, vrStatusStore, type OverlayStatus, type VrStatus } from "./session";
 
 export interface MonitorInfo {
   index: number;
@@ -16,6 +16,26 @@ export interface MonitorInfo {
   height: number;
   isPrimary: boolean;
 }
+
+/** Global VR placement controls (mirrors Rust `VrGlobals`, camelCase). */
+export interface VrGlobals {
+  distanceM: number;
+  scale: number;
+  curvature: number;
+  headLocked: boolean;
+}
+
+/** One widget's panel rectangle (physical px) + depth (mirrors Rust `VrWidget`). */
+export interface VrWidgetLayout {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  depthM: number;
+}
+
+export type VrBackendKind = "auto" | "openvr" | "openxr";
 
 async function cmd<T = void>(name: string, args?: Record<string, unknown>): Promise<T | undefined> {
   if (!isTauri()) return undefined;
@@ -76,5 +96,39 @@ export const controls = {
   async fetchStatus(): Promise<void> {
     const s = await cmd<OverlayStatus>("get_status");
     if (s) statusStore.set(s);
+  },
+
+  // --- VR compositor ---
+
+  /** Enable/disable the VR compositor. Returns the resulting status (or throws
+   *  the backend message, e.g. "SteamVR not running"). */
+  async vrSetEnabled(enabled: boolean, globals?: VrGlobals, backend?: VrBackendKind): Promise<VrStatus> {
+    if (!isTauri()) {
+      const s: VrStatus = { available: false, active: false, backend: "none", message: "VR needs the desktop app" };
+      vrStatusStore.set(s);
+      return s;
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    const s = await invoke<VrStatus>("vr_set_enabled", { enabled, globals, backend });
+    vrStatusStore.set(s);
+    return s;
+  },
+
+  async vrSetGlobals(globals: VrGlobals): Promise<void> {
+    await cmd("vr_set_globals", { globals });
+  },
+
+  async vrSetLayout(widgets: VrWidgetLayout[]): Promise<void> {
+    await cmd("vr_set_layout", { widgets });
+  },
+
+  async vrRecenter(): Promise<void> {
+    await cmd("vr_recenter");
+  },
+
+  async vrStatus(): Promise<VrStatus | undefined> {
+    const s = await cmd<VrStatus>("vr_status");
+    if (s) vrStatusStore.set(s);
+    return s;
   },
 };

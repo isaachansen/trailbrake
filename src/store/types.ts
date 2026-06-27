@@ -29,6 +29,10 @@ export interface FastSample {
   absActive: boolean | null;
   /** Traction control active this frame. */
   tcActive: boolean | null;
+  /** Spotter: a car is alongside on the left (iRacing CarLeftRight). */
+  carLeft: boolean | null;
+  /** Spotter: a car is alongside on the right (iRacing CarLeftRight). */
+  carRight: boolean | null;
 }
 
 /** One car in the field. Mirrors overlay-core's `CarState`. */
@@ -51,6 +55,13 @@ export interface CarEntry {
   lastLapS: number | null;
   bestLapS: number | null;
   onPitRoad: boolean | null;
+  /**
+   * Whether this car is loaded into the world (on track / in pits / off-track)
+   * vs. absent from the session (garage, disconnected, not yet joined). `null`
+   * when the sim doesn't distinguish. The Relative widget hides cars that are
+   * not in the world so stale roster entries don't appear as phantom neighbours.
+   */
+  inWorld: boolean | null;
   irating: number | null;
   /** License string, e.g. "A 3.99" (letter + safety rating). */
   safetyRating: string | null;

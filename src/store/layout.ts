@@ -25,6 +25,8 @@ export interface WidgetInstance {
   useGeneralOpacity: boolean;
   useGeneralScale: boolean;
   useGeneralShowIn: boolean;
+  /** VR-only: metres nearer (−) / farther (+) than the global panel distance. */
+  vrDepth: number;
   config: Record<string, unknown>;
 }
 
@@ -56,8 +58,6 @@ interface ConfigBlob {
   carProfiles?: Record<string, string>;
   /** Global overlay defaults (size/opacity/visibility) inherited via useGeneral. */
   defaults?: Partial<OverlayDefaults>;
-  /** Full-height red screen-edge glow when a car is alongside (spotter). */
-  spotterEdges?: boolean;
 }
 
 interface LayoutState {
@@ -65,7 +65,6 @@ interface LayoutState {
   profiles: Record<string, Layout>;
   carProfiles: Record<string, string>;
   defaults: OverlayDefaults;
-  spotterEdges: boolean;
   selectedId: string | null;
   loaded: boolean;
 }
@@ -111,6 +110,7 @@ function makeInstance(type: string, index: number): WidgetInstance | null {
     useGeneralOpacity: true,
     useGeneralScale: true,
     useGeneralShowIn: true,
+    vrDepth: 0,
     config: structuredClone(def.defaultConfig),
   };
 }
@@ -141,7 +141,6 @@ let state: LayoutState = {
   profiles: { Default: defaultLayout() },
   carProfiles: {},
   defaults: { ...DEFAULT_DEFAULTS },
-  spotterEdges: true,
   selectedId: null,
   loaded: false,
 };
@@ -166,7 +165,6 @@ function currentBlob(): ConfigBlob {
     profiles: state.profiles,
     carProfiles: state.carProfiles,
     defaults: state.defaults,
-    spotterEdges: state.spotterEdges,
   };
 }
 
@@ -207,6 +205,7 @@ function normalizeProfiles(profiles: Record<string, Layout>): Record<string, Lay
           useGeneralOpacity: w.useGeneralOpacity ?? true,
           useGeneralScale: w.useGeneralScale ?? true,
           useGeneralShowIn: w.useGeneralShowIn ?? true,
+          vrDepth: typeof w.vrDepth === "number" ? w.vrDepth : 0,
           config: { ...structuredClone(def.defaultConfig), ...(w.config ?? {}) },
         };
       })
@@ -246,7 +245,6 @@ export const layoutStore = {
         profiles: normalizeProfiles(blob.profiles),
         carProfiles: blob.carProfiles ?? {},
         defaults: normalizeDefaults(blob.defaults),
-        spotterEdges: blob.spotterEdges ?? true,
         selectedId: stillThere ? state.selectedId : null,
         loaded: true,
       };
@@ -268,12 +266,6 @@ export const layoutStore = {
   },
   setDefault(partial: Partial<OverlayDefaults>) {
     state = { ...state, defaults: { ...state.defaults, ...partial } };
-    emit();
-    schedulePersist();
-  },
-  /** Toggle the full-height red screen-edge spotter glow. */
-  setSpotterEdges(on: boolean) {
-    state = { ...state, spotterEdges: on };
     emit();
     schedulePersist();
   },
@@ -299,7 +291,6 @@ export const layoutStore = {
             profiles: normalizeProfiles(blob.profiles),
             carProfiles: blob.carProfiles ?? {},
             defaults: normalizeDefaults(blob.defaults),
-            spotterEdges: blob.spotterEdges ?? true,
             selectedId: null,
             loaded: true,
           };

@@ -10,6 +10,18 @@ import { isTauri } from "./store/transport";
 async function boot() {
   const root = ReactDOM.createRoot(document.getElementById("root") as HTMLElement);
 
+  // Dev/visual-testing route: `?gallery` renders every widget in isolation with
+  // mock data, for screenshot capture and UI review (see scripts/shoot-widgets.mjs).
+  if (!isTauri() && new URLSearchParams(window.location.search).has("gallery")) {
+    const { default: WidgetGallery } = await import("./gallery/WidgetGallery");
+    root.render(
+      <React.StrictMode>
+        <WidgetGallery />
+      </React.StrictMode>
+    );
+    return;
+  }
+
   let label = "manager";
   if (isTauri()) {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");

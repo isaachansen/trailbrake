@@ -22,6 +22,17 @@ export const SESSION_TYPES: { key: SessionType; label: string }[] = [
   { key: "practice", label: "practice" },
 ];
 
+/** Classify the sim's `sessionType` string into a coarse race/qualy/practice. */
+export function classifySessionType(s: string | null | undefined): SessionType | null {
+  if (!s) return null;
+  const t = s.toLowerCase();
+  if (t.includes("qual")) return "qualy";
+  if (t.includes("race")) return "race";
+  if (t.includes("practice") || t.includes("warmup") || t.includes("test") || t.includes("lone") || t.includes("open"))
+    return "practice";
+  return null;
+}
+
 /**
  * One entry stored for a `fieldList` config value: whether the field is on, and
  * which session types it shows in. Order in the array is the display order.
@@ -90,5 +101,11 @@ export interface WidgetDefinition<C = Record<string, unknown>> {
   requiredCapabilities: (keyof Capabilities)[];
   /** Declarative options the settings panel turns into controls. */
   configSchema: ConfigField[];
+  /**
+   * When this returns true for the given config, the host paints no panel chrome
+   * (transparent — no fill, border, blur, or shadow) outside edit mode. For
+   * widgets that render only a screen-level effect and have no panel of their own.
+   */
+  transparentPanel?: (config: C) => boolean;
   Component: ComponentType<BaseWidgetProps<C>>;
 }

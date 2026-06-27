@@ -18,6 +18,8 @@ export interface InputGraphConfig {
   showSpeed: boolean;
   showBars: boolean;
   showStats: boolean;
+  /** Show the clutch trace line, bar, and stat cell. */
+  showClutch: boolean;
   /** Show a gear + speed readout (like the Dash widget). */
   showGearSpeed: boolean;
 }
@@ -27,6 +29,7 @@ const defaultConfig: InputGraphConfig = {
   showSpeed: true,
   showBars: true,
   showStats: true,
+  showClutch: true,
   showGearSpeed: true,
 };
 
@@ -38,6 +41,7 @@ function InputGraph({ theme, config }: BaseWidgetProps<InputGraphConfig>) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const thrBar = useRef<HTMLDivElement | null>(null);
   const brkBar = useRef<HTMLDivElement | null>(null);
+  const cluBar = useRef<HTMLDivElement | null>(null);
   const thrPct = useRef<HTMLDivElement | null>(null);
   const brkPct = useRef<HTMLDivElement | null>(null);
   const cluPct = useRef<HTMLDivElement | null>(null);
@@ -105,7 +109,7 @@ function InputGraph({ theme, config }: BaseWidgetProps<InputGraphConfig>) {
         const xOf = (ts: number) => w * (1 - (tNow - ts) / win);
 
         // Filled pedal area + stroke (the "real pedal input" look).
-        const pedalArea = (key: "throttle" | "brake", fill: string, stroke: string) => {
+        const pedalArea = (key: "throttle" | "brake" | "clutch", fill: string, stroke: string) => {
           let started = false;
           ctx.beginPath();
           for (let i = 0; i < history.length; i++) {
@@ -149,10 +153,29 @@ function InputGraph({ theme, config }: BaseWidgetProps<InputGraphConfig>) {
         pedalArea("throttle", withAlpha(theme.colors.throttle, 0.16), theme.colors.throttle);
         pedalArea("brake", withAlpha(theme.colors.brake, 0.15), theme.colors.brake);
 
+        // Clutch as a solid line only (it sits at 0 most of the lap, so a filled
+        // area would just be noise). Cyan, matching the CLU stat cell.
+        if (config.showClutch) {
+          ctx.beginPath();
+          let started = false;
+          for (let i = 0; i < history.length; i++) {
+            const s = history[i];
+            if (s.clutch == null) continue;
+            const x = xOf(s.ts);
+            const y = pedalBottom - clamp01(s.clutch) * pedalH;
+            started ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+            started = true;
+          }
+          ctx.strokeStyle = theme.colors.clutch;
+          ctx.lineWidth = 2;
+          ctx.lineJoin = "round";
+          ctx.stroke();
+        }
+
         // Speed line in the lower band.
         if (config.showSpeed) {
-          const sTop = h * 0.7;
-          const sH = Math.max(1, h - 4 - sTop);
+          const sTop = h * 0.72;
+          const sH = Math.max(1, h - 8 - sTop);
           ctx.beginPath();
           let started = false;
           for (let i = 0; i < history.length; i++) {
@@ -173,6 +196,7 @@ function InputGraph({ theme, config }: BaseWidgetProps<InputGraphConfig>) {
       if (latest) {
         if (thrBar.current) thrBar.current.style.height = `${Math.round(clamp01(latest.throttle ?? 0) * 100)}%`;
         if (brkBar.current) brkBar.current.style.height = `${Math.round(clamp01(latest.brake ?? 0) * 100)}%`;
+        if (cluBar.current) cluBar.current.style.height = `${Math.round(clamp01(latest.clutch ?? 0) * 100)}%`;
         setText(thrPct.current, pct(latest.throttle));
         setText(brkPct.current, pct(latest.brake));
         setText(cluPct.current, pct(latest.clutch));
@@ -204,16 +228,16 @@ function InputGraph({ theme, config }: BaseWidgetProps<InputGraphConfig>) {
   const barTrack: React.CSSProperties = {
     width: 10,
     height: "100%",
-    background: "rgba(255,255,255,0.07)",
-    borderRadius: 4,
+    background: theme.colors.cell,
+    borderRadius: theme.space.xs,
     display: "flex",
     alignItems: "flex-end",
     overflow: "hidden",
   };
   const cell = (label: string, color: string, ref: React.RefObject<HTMLDivElement>, initial: string) => (
-    <div style={{ flex: 1, textAlign: "center", padding: "5px 2px", background: theme.colors.cell, borderRadius: 9 }}>
+    <div style={{ flex: 1, textAlign: "center", padding: "5px 2px", background: theme.colors.cell, borderRadius: theme.space.md }}>
       <div ref={ref} style={{ fontFamily: theme.font.mono, fontWeight: 700, fontSize: "1.05em", color }}>{initial}</div>
-      <div style={{ fontSize: "0.6em", fontWeight: 600, letterSpacing: "0.12em", color: theme.colors.textDim2 }}>{label}</div>
+      <div style={{ fontFamily: theme.font.label, fontSize: "0.6em", fontWeight: 600, letterSpacing: "0.12em", color: theme.colors.textDim2 }}>{label}</div>
     </div>
   );
 
@@ -221,12 +245,12 @@ function InputGraph({ theme, config }: BaseWidgetProps<InputGraphConfig>) {
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: theme.colors.text, padding: "9px 10px", boxSizing: "border-box" }}>
       {config.showGearSpeed && (
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 7, padding: "0 2px" }}>
-          <div style={{ background: theme.colors.cell, borderRadius: 10, padding: "3px 12px", display: "grid", placeItems: "center" }}>
+          <div style={{ background: theme.colors.cell, borderRadius: theme.space.md, padding: "3px 12px", display: "grid", placeItems: "center" }}>
             <div ref={gearRef} style={{ fontFamily: theme.font.family, fontWeight: 800, fontSize: "2.1em", lineHeight: 0.85, color: "#fff", minWidth: "0.6em", textAlign: "center" }}>N</div>
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
             <span ref={speedRef} style={{ fontFamily: theme.font.family, fontWeight: 700, fontSize: "1.9em", lineHeight: 0.85, color: "#fff", fontVariantNumeric: "tabular-nums" }}>0</span>
-            <span style={{ fontWeight: 600, fontSize: "0.62em", letterSpacing: "0.12em", color: theme.colors.textDim2 }}>{speedLabel(units)}</span>
+            <span style={{ fontFamily: theme.font.label, fontWeight: 600, fontSize: "0.62em", letterSpacing: "0.12em", color: theme.colors.textDim2 }}>{speedLabel(units)}</span>
           </div>
         </div>
       )}
@@ -239,9 +263,14 @@ function InputGraph({ theme, config }: BaseWidgetProps<InputGraphConfig>) {
             <div style={barTrack}>
               <div ref={brkBar} style={{ width: "100%", height: "0%", background: theme.colors.brake, transition: "height .06s linear" }} />
             </div>
+            {config.showClutch && (
+              <div style={barTrack}>
+                <div ref={cluBar} style={{ width: "100%", height: "0%", background: theme.colors.clutch, transition: "height .06s linear" }} />
+              </div>
+            )}
           </div>
         )}
-        <div style={{ flex: 1, position: "relative", background: "rgba(255,255,255,0.03)", borderRadius: 10, overflow: "hidden" }}>
+        <div style={{ flex: 1, position: "relative", background: theme.colors.cell, borderRadius: theme.space.md, overflow: "hidden" }}>
           <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
         </div>
       </div>
@@ -250,7 +279,7 @@ function InputGraph({ theme, config }: BaseWidgetProps<InputGraphConfig>) {
         <div style={{ display: "flex", gap: 5, marginTop: 7 }}>
           {cell("THR %", theme.colors.throttle, thrPct, "0")}
           {cell("BRK %", theme.colors.brake, brkPct, "0")}
-          {cell("CLU %", theme.colors.clutch, cluPct, "0")}
+          {config.showClutch && cell("CLU %", theme.colors.clutch, cluPct, "0")}
           {cell("STEER", theme.colors.text, steerVal, "0°")}
         </div>
       )}
@@ -271,6 +300,7 @@ export const inputGraphDef: WidgetDefinition<InputGraphConfig> = {
     { key: "showGearSpeed", label: "Gear & speed", type: "boolean" },
     { key: "showSpeed", label: "Speed trace", type: "boolean" },
     { key: "showBars", label: "Pedal bars", type: "boolean" },
+    { key: "showClutch", label: "Clutch", type: "boolean" },
     { key: "showStats", label: "Stat cells", type: "boolean" },
   ],
   Component: InputGraph,

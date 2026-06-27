@@ -5,6 +5,7 @@
 import { useRef } from "react";
 import { layoutStore, type WidgetInstance } from "../store/layout";
 import { getWidgetDef } from "../widgets/registry";
+import { FitContent } from "./FitContent";
 import type { Capabilities } from "../store/types";
 import type { SessionStateKey } from "../store/sessionState";
 import type { Theme } from "../theme/theme";
@@ -34,6 +35,11 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
   // (the glass look comes from lowering it, not from a baked-in translucency).
   const panelAlpha = Math.max(0, Math.min(1, eff.opacity));
   const surfaceBg = `rgba(18, 20, 27, ${panelAlpha})`;
+
+  // Some widgets paint only a screen-level effect (e.g. the Spotter set to
+  // edges-only) and want no panel of their own. Outside edit mode we drop all
+  // chrome so nothing shows; in edit mode the chrome stays so it's selectable.
+  const chromeless = (def.transparentPanel?.(instance.config as any) ?? false) && !editing;
 
   // Capability-based hiding (§3): if the active sim can't feed this widget, hide
   // it entirely in race mode; in edit mode show a placeholder so the user knows.
@@ -91,12 +97,14 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
         width: instance.size.w,
         height: instance.size.h,
         fontSize: theme.font.sizeBase * eff.scale,
-        background: surfaceBg,
-        backdropFilter: theme.panelBlur,
-        WebkitBackdropFilter: theme.panelBlur,
+        background: chromeless ? "transparent" : surfaceBg,
+        backdropFilter: chromeless ? "none" : theme.panelBlur,
+        WebkitBackdropFilter: chromeless ? "none" : theme.panelBlur,
         border: editing
           ? `1px ${selected ? "solid" : "dashed"} ${selected ? theme.colors.edit : theme.colors.surfaceBorder}`
-          : `1px solid ${theme.colors.surfaceBorder}`,
+          : chromeless
+            ? "none"
+            : `1px solid ${theme.colors.surfaceBorder}`,
         borderRadius: theme.radius,
         boxSizing: "border-box",
         display: "flex",
@@ -105,7 +113,7 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
         pointerEvents: editing ? "auto" : "none",
         // The selection ring only belongs in edit mode — never leave it on a widget
         // after "Done editing".
-        boxShadow: editing && selected ? `${theme.panelShadow}, 0 0 0 1px ${theme.colors.edit}` : theme.panelShadow,
+        boxShadow: editing && selected ? `${theme.panelShadow}, 0 0 0 1px ${theme.colors.edit}` : chromeless ? "none" : theme.panelShadow,
       }}
     >
       {editing && (
@@ -186,7 +194,9 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
             Unavailable — this sim doesn't provide: {missingCaps.join(", ")}
           </div>
         ) : (
-          <Comp theme={theme} config={instance.config as any} caps={caps} size={instance.size} />
+          <FitContent>
+            {(size) => <Comp theme={theme} config={instance.config as any} caps={caps} size={size} />}
+          </FitContent>
         )}
       </div>
 

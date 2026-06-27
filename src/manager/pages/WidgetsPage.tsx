@@ -96,8 +96,8 @@ export function WidgetsPage() {
               <div className="wcard-preview" onClick={() => setModalId(def.id)}>
                 <WidgetPreview
                   def={def}
-                  maxW={320}
-                  maxH={150}
+                  maxW={256}
+                  maxH={170}
                   config={inst?.config}
                   opacity={eff.opacity}
                   widgetScale={eff.scale}
