@@ -173,6 +173,8 @@ function CornerName({ theme, config }: BaseWidgetProps<CornerNameConfig>) {
 export const cornerNameDef: WidgetDefinition<CornerNameConfig> = {
   id: "corner-name",
   name: "Corner Name",
+  // Work in progress — hidden from the catalog in release builds (see contract).
+  draft: true,
   defaultSize: { w: 300, h: 76 },
   minSize: { w: 200, h: 64 },
   defaultConfig,

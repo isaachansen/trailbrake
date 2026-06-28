@@ -150,6 +150,8 @@ function LaunchAssist({ theme, config }: BaseWidgetProps<LaunchAssistConfig>) {
 export const launchAssistDef: WidgetDefinition<LaunchAssistConfig> = {
   id: "launch-assist",
   name: "Launch Assist",
+  // Work in progress — hidden from the catalog in release builds (see contract).
+  draft: true,
   defaultSize: { w: 200, h: 204 },
   minSize: { w: 140, h: 168 },
   defaultConfig,

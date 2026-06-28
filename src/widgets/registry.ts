@@ -67,7 +67,11 @@ const DEFS: WidgetDefinition<any>[] = [
 const BY_ID = new Map<string, WidgetDefinition<any>>(DEFS.map((d) => [d.id, d]));
 
 export function allWidgetDefs(): WidgetDefinition<any>[] {
-  return DEFS;
+  // Draft (work-in-progress) widgets are available while developing
+  // (`npm run dev` / `tauri dev`) but hidden from the add-widget catalogs in
+  // production/release builds. `getWidgetDef` stays unfiltered, so an instance
+  // that's already placed still resolves and renders.
+  return import.meta.env.DEV ? DEFS : DEFS.filter((d) => !d.draft);
 }
 
 export function getWidgetDef(id: string): WidgetDefinition<any> | undefined {

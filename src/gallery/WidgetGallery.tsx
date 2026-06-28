@@ -264,7 +264,15 @@ export default function WidgetGallery() {
   if (widgetId) {
     const def = getWidgetDef(widgetId);
     if (!def) return <Page bg={bg}>{`Unknown widget: ${widgetId}`}</Page>;
+    // Merge a partial `config` override over the widget's defaults so passing e.g.
+    // {"showSpeed":false} doesn't drop the other config keys.
+    const cfg = configOverride ? { ...(def.defaultConfig as object), ...configOverride } : undefined;
+    // Content-driven widgets size their height to the enabled sections, so the
+    // override visibly shrinks the box (matching the real overlay behavior).
     const size = sizeFor(def, sizeMode, w, h);
+    if (def.contentHeight && sizeMode === "default" && !h) {
+      size.h = Math.round(def.contentHeight((cfg ?? def.defaultConfig) as never) * widgetScale);
+    }
     return (
       <Page bg={bg}>
         <div
@@ -283,7 +291,7 @@ export default function WidgetGallery() {
               h={size.h}
               opacity={opacity}
               widgetScale={widgetScale}
-              config={configOverride}
+              config={cfg}
             />
           )}
         </div>

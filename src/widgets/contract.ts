@@ -107,5 +107,20 @@ export interface WidgetDefinition<C = Record<string, unknown>> {
    * widgets that render only a screen-level effect and have no panel of their own.
    */
   transparentPanel?: (config: C) => boolean;
+  /**
+   * Optional content-driven height (in design px, at scale 1) for a given config.
+   * When the widget's config toggles a stacked section on/off, the host resizes
+   * the instance by that section's contribution — so removing a section makes the
+   * widget *shorter* rather than letting the remaining content stretch to fill the
+   * freed space. `defaultSize.h` should equal `contentHeight(defaultConfig)`.
+   */
+  contentHeight?: (config: C) => number;
+  /**
+   * Work-in-progress widget: kept in the registry (so it still renders if placed,
+   * and shows up for development in `npm run dev` / `tauri dev`) but hidden from
+   * the add-widget catalogs in production/release builds, so users can't add it
+   * until it's ready. See `allWidgetDefs`.
+   */
+  draft?: boolean;
   Component: ComponentType<BaseWidgetProps<C>>;
 }

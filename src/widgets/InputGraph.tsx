@@ -293,6 +293,13 @@ export const inputGraphDef: WidgetDefinition<InputGraphConfig> = {
   defaultSize: { w: 380, h: 236 },
   minSize: { w: 220, h: 150 },
   defaultConfig,
+  // Height tracks which stacked sections are on (design px @ scale 1): a base
+  // (padding + pedal bars/graph) plus the gear+speed row, the speed-trace band,
+  // and the stat-cell row. Sums to defaultSize.h (236) with everything enabled,
+  // so toggling a section off makes the widget shorter instead of stretching the
+  // graph. (showBars/showClutch change width/columns, not height.)
+  contentHeight: (c) =>
+    104 + (c.showGearSpeed ? 41 : 0) + (c.showSpeed ? 48 : 0) + (c.showStats ? 43 : 0),
   requiredPaths: ["fast"],
   requiredCapabilities: [],
   configSchema: [

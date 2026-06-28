@@ -143,6 +143,8 @@ function SetupComparison({ theme, config }: BaseWidgetProps<SetupComparisonConfi
 export const setupComparisonDef: WidgetDefinition<SetupComparisonConfig> = {
   id: "setup-comparison",
   name: "Setup Comparison",
+  // Work in progress — hidden from the catalog in release builds (see contract).
+  draft: true,
   defaultSize: { w: 380, h: 300 },
   minSize: { w: 280, h: 180 },
   defaultConfig,

@@ -124,6 +124,8 @@ function RaceControl({ theme, config }: BaseWidgetProps<RaceControlConfig>) {
 export const raceControlDef: WidgetDefinition<RaceControlConfig> = {
   id: "racecontrol",
   name: "Race Control",
+  // Work in progress — hidden from the catalog in release builds (see contract).
+  draft: true,
   defaultSize: { w: 392, h: 220 },
   minSize: { w: 260, h: 120 },
   defaultConfig,

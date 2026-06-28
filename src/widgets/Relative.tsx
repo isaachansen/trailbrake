@@ -14,7 +14,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSlow } from "../store/hooks";
 import { useSettings } from "../store/appSettings";
-import { fmtGap, fmtLapTime, fmtDelta, hexToRgba, fuelValue, fuelLabel, type UnitSystem } from "./format";
+import { fmtGap, fmtLapTime, fmtDelta, hexToRgba, fuelValue, fuelLabel, tempValue, tempLabel, type UnitSystem } from "./format";
+import { InfoIcon } from "./relativeInfoIcons";
 import { flagOf, parseLicense, classColorMap, classColorOf } from "./raceColors";
 import { LicenseBadge } from "./LicenseBadge";
 import { TyreBadge } from "./TyreBadge";
@@ -91,6 +92,10 @@ const INFO_FIELDS: InfoFieldDef[] = [
   { key: "deltaSess", label: "Δ sess", render: (s) => (s?.deltaSessionBestS != null ? fmtDelta(s.deltaSessionBestS) : null) },
   { key: "fuel", label: "Fuel", render: (s, u) => (s?.fuelL != null ? `${fuelValue(s.fuelL, u)!.toFixed(1)}${fuelLabel(u)}` : null) },
   { key: "fuelPerLap", label: "Fuel/lap", render: (s, u) => (s?.fuelPerLapL != null ? `${fuelValue(s.fuelPerLapL, u)!.toFixed(2)}${fuelLabel(u)}` : null) },
+  // Conditions (icons in the design; data-backed fields only — never faked).
+  { key: "airTemp", label: "Air temp", render: (s, u) => { const v = tempValue(s?.airTempC ?? null, u); return v != null ? `${Math.round(v)}${tempLabel(u)}` : null; } },
+  { key: "trackTemp", label: "Track temp", render: (s, u) => { const v = tempValue(s?.trackTempC ?? null, u); return v != null ? `${Math.round(v)}${tempLabel(u)}` : null; } },
+  { key: "brakeBias", label: "Brake bias", render: (s) => (s?.brakeBiasPct != null ? `${(s.brakeBiasPct * 100).toFixed(1)}%` : null) },
 ];
 
 /** Catalog exposed to the settings panel (key + label, in default order). */
@@ -127,13 +132,13 @@ function visibleChips(entries: InfoFieldConfig[] | undefined, slow: SlowSample |
     .filter((x): x is { def: InfoFieldDef; value: string } => x.def != null && x.value != null);
 }
 
-function InfoBar({ chips, color, dim, mono, label }: { chips: { def: InfoFieldDef; value: string }[]; color: string; dim: string; mono: string; label: string }) {
+function InfoBar({ chips, color, dim, mono }: { chips: { def: InfoFieldDef; value: string }[]; color: string; dim: string; mono: string }) {
   if (chips.length === 0) return null;
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "0.45em 0.9em", padding: "0 0.6em", fontSize: "0.7em" }}>
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.45em 0.9em", padding: "0 0.6em", fontSize: "0.7em" }}>
       {chips.map(({ def, value }) => (
-        <span key={def.key} style={{ whiteSpace: "nowrap" }}>
-          <span style={{ fontFamily: label, color: dim, letterSpacing: "0.04em", marginRight: "0.45em" }}>{def.label}</span>
+        <span key={def.key} title={def.label} style={{ display: "inline-flex", alignItems: "center", gap: "0.42em", whiteSpace: "nowrap" }}>
+          <span style={{ color: dim, display: "inline-flex" }}><InfoIcon name={def.key} /></span>
           <span style={{ color, fontFamily: mono, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{value}</span>
         </span>
       ))}
@@ -288,7 +293,7 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
 
       {headerChips.length > 0 && (
         <div style={{ paddingBottom: 5, marginBottom: 4, borderBottom: `1px solid ${hexToRgba("#ffffff", 0.12)}` }}>
-          <InfoBar chips={headerChips} color={t.text} dim={t.textDim2} mono={mono} label={theme.font.label} />
+          <InfoBar chips={headerChips} color={t.text} dim={t.textDim} mono={mono} />
         </div>
       )}
 
@@ -396,7 +401,7 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
 
       {footerChips.length > 0 && (
         <div style={{ paddingTop: 5, marginTop: 4, borderTop: `1px solid ${hexToRgba("#ffffff", 0.12)}` }}>
-          <InfoBar chips={footerChips} color={t.text} dim={t.textDim2} mono={mono} label={theme.font.label} />
+          <InfoBar chips={footerChips} color={t.text} dim={t.textDim} mono={mono} />
         </div>
       )}
     </div>

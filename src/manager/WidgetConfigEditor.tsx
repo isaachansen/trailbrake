@@ -56,7 +56,23 @@ export function WidgetConfigEditor({ instance }: Props) {
 
   const defaults = layoutStore.getDefaults();
   const setInstance = (partial: Partial<WidgetInstance>) => layoutStore.updateInstance(instance.instanceId, partial);
-  const setConfig = (partial: Record<string, unknown>) => layoutStore.updateConfig(instance.instanceId, partial);
+
+  // Apply a config change and, for widgets whose height is content-driven, resize
+  // the instance by the toggled section's contribution — so removing a section
+  // makes the widget shorter rather than letting the rest stretch. The delta
+  // (not an absolute set) preserves any manual resizing the user has done.
+  const setConfig = (partial: Record<string, unknown>) => {
+    if (def.contentHeight) {
+      const next = { ...instance.config, ...partial };
+      const deltaDesign = def.contentHeight(next) - def.contentHeight(instance.config);
+      if (deltaDesign !== 0) {
+        const eff = layoutStore.getEffective(instance);
+        const h = Math.max(def.minSize.h, Math.round(instance.size.h + deltaDesign * eff.scale));
+        setInstance({ size: { w: instance.size.w, h } });
+      }
+    }
+    layoutStore.updateConfig(instance.instanceId, partial);
+  };
 
   const toggleState = (key: SessionStateKey) => {
     const cur = instance.showIn;
