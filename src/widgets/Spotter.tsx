@@ -5,6 +5,12 @@
 // its own); in the manager preview that layer is the preview card, so the glow
 // demos itself there.
 //
+// The widget panel auto-hides: it pops in only while a car is actually alongside
+// and disappears otherwise, so it isn't a permanent empty box. The widget owns
+// its own panel chrome (the host is transparent for it) so the whole thing — not
+// just its contents — can appear/disappear with the signal. (In the manager
+// preview the panel always shows so you can see the widget.)
+//
 // Detection uses proximity data (relLatM/relLonM) when the sim provides it, and
 // falls back to the sim's own CarLeftRight spotter signal (carLeft/carRight) when
 // it doesn't — so this works on iRacing even though its SDK exposes no lateral
@@ -38,6 +44,10 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
   const wideRef = useRef<HTMLDivElement | null>(null);
   const edgeLeftRef = useRef<HTMLDivElement | null>(null);
   const edgeRightRef = useRef<HTMLDivElement | null>(null);
+  // The widget panel auto-hides: it pops in only while a car is alongside. We
+  // toggle its opacity/scale from the draw loop (no React re-render), like the
+  // bars — so it appears and disappears with the spotter signal.
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const live = useRef({ config, preview });
   live.current = { config, preview };
 
@@ -67,6 +77,11 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
         if (wideRef.current) wideRef.current.style.display = "none";
         if (edgeLeftRef.current) edgeLeftRef.current.style.opacity = (0.95 * l).toFixed(3);
         if (edgeRightRef.current) edgeRightRef.current.style.opacity = (0.95 * r).toFixed(3);
+        // Keep the panel visible in preview so the widget is actually shown.
+        if (panelRef.current) {
+          panelRef.current.style.opacity = "1";
+          panelRef.current.style.transform = "scale(1)";
+        }
         raf = requestAnimationFrame(draw);
         return;
       }
@@ -102,6 +117,14 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
       if (leftRef.current) leftRef.current.style.opacity = warnL ? "1" : "0.12";
       if (rightRef.current) rightRef.current.style.opacity = warnR ? "1" : "0.12";
       if (wideRef.current) wideRef.current.style.display = warnL && warnR ? "block" : "none";
+
+      // The widget panel only pops up while a car is actually alongside, and
+      // disappears otherwise (the screen-edge glow has its own logic below).
+      const alongside = warnL || warnR;
+      if (panelRef.current) {
+        panelRef.current.style.opacity = alongside ? "1" : "0";
+        panelRef.current.style.transform = alongside ? "scale(1)" : "scale(0.92)";
+      }
 
       // Screen-edge glow. Pulse it (~2 Hz, 0.72..1.0) when active so it grabs
       // peripheral attention while the driver is focused on the track — a steady
@@ -158,7 +181,29 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
   return (
     <>
       {showWidget && (
-        <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: theme.space.lg, boxSizing: "border-box" }}>
+        <div
+          ref={panelRef}
+          style={{
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+            color: t.text,
+            padding: theme.space.lg,
+            boxSizing: "border-box",
+            // The widget owns its panel chrome (the host is transparent for the
+            // Spotter) so the whole thing can pop in / out with the signal.
+            background: t.surface,
+            border: `1px solid ${t.surfaceBorder}`,
+            borderRadius: theme.radius,
+            backdropFilter: theme.panelBlur,
+            WebkitBackdropFilter: theme.panelBlur,
+            opacity: 0,
+            transform: "scale(0.92)",
+            transformOrigin: "center",
+            transition: "opacity 0.16s ease, transform 0.16s ease",
+          }}
+        >
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: theme.space.lg, minHeight: 0 }}>
             <div ref={leftRef} style={bar} />
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: theme.space.sm }}>
@@ -206,7 +251,9 @@ export const spotterDef: WidgetDefinition<SpotterConfig> = {
       ],
     },
   ],
-  // Edges-only mode has no panel of its own — render it chromeless.
-  transparentPanel: (c) => c.display === "edges",
+  // The host never draws a panel for the Spotter: in edges-only mode there's no
+  // panel at all, and in widget/both mode the widget draws its own auto-hiding
+  // panel (it pops in only when a car is alongside), so it must own the chrome.
+  transparentPanel: () => true,
   Component: Spotter,
 };
