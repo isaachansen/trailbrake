@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
 import { useSlow } from "../store/hooks";
 import { resolveCarLeds, gearLeds } from "./carLeds";
+import { GEAR_COLOR_PRESETS } from "./raceColors";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface TachometerConfig {
@@ -10,6 +11,8 @@ export interface TachometerConfig {
   showRpmText: boolean;
   showGear: boolean;
   orientation: "horizontal" | "vertical";
+  /** Color of the gear digit (hex). */
+  gearColor: string;
 }
 
 const defaultConfig: TachometerConfig = {
@@ -18,6 +21,7 @@ const defaultConfig: TachometerConfig = {
   showRpmText: true,
   showGear: true,
   orientation: "horizontal",
+  gearColor: "#ffffff",
 };
 
 function Tachometer({ theme, config }: BaseWidgetProps<TachometerConfig>) {
@@ -72,7 +76,7 @@ function Tachometer({ theme, config }: BaseWidgetProps<TachometerConfig>) {
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: vertical ? "row" : "column", alignItems: "stretch", justifyContent: "center", gap: vertical ? sp.lg : sp.md, padding: theme.widgetPad, boxSizing: "border-box", color: t.text, overflow: "hidden" }}>
       {config.showGear && (
         <div style={{ flex: "0 0 auto", display: "flex", flexDirection: vertical ? "column" : "row", alignItems: vertical ? "center" : "baseline", justifyContent: "center", gap: vertical ? 2 : sp.sm, minHeight: 0 }}>
-          <span ref={gearRef} style={{ fontFamily: theme.font.family, fontWeight: 700, fontSize: "2.6em", color: "#fff", lineHeight: 0.8, textAlign: "center", fontVariantNumeric: "tabular-nums" }}>--</span>
+          <span ref={gearRef} style={{ fontFamily: theme.font.family, fontWeight: 700, fontSize: "2.6em", color: config.gearColor ?? "#ffffff", lineHeight: 0.8, textAlign: "center", fontVariantNumeric: "tabular-nums" }}>--</span>
           <span style={{ fontFamily: theme.font.label, fontWeight: 600, fontSize: "0.62em", letterSpacing: "0.22em", color: t.textDim }}>GEAR</span>
         </div>
       )}
@@ -106,6 +110,7 @@ export const tachometerDef: WidgetDefinition<TachometerConfig> = {
     { key: "showRpmText", label: "Show RPM text", type: "boolean" },
     { key: "showGear", label: "Show gear", type: "boolean" },
     { key: "orientation", label: "Orientation", type: "enum", options: [{ value: "horizontal", label: "Horizontal" }, { value: "vertical", label: "Vertical" }] },
+    { key: "gearColor", label: "Gear color", type: "color", presets: GEAR_COLOR_PRESETS },
   ],
   Component: Tachometer,
 };

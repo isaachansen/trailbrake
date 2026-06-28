@@ -14,6 +14,7 @@ import { useSettings } from "../store/appSettings";
 import { useSlow } from "../store/hooks";
 import { speedValue, speedLabel } from "./format";
 import { resolveCarLeds, gearLeds } from "./carLeds";
+import { GEAR_COLOR_PRESETS } from "./raceColors";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface DashClusterConfig {
@@ -27,6 +28,8 @@ export interface DashClusterConfig {
   /** A compact throttle/brake trace in the center. */
   showInputs: boolean;
   showSteering: boolean;
+  /** Color of the gear digit (hex). */
+  gearColor: string;
 }
 
 const defaultConfig: DashClusterConfig = {
@@ -35,6 +38,7 @@ const defaultConfig: DashClusterConfig = {
   showLeds: true,
   showInputs: false,
   showSteering: true,
+  gearColor: "#ffffff",
 };
 
 const LED_COUNT = 16;
@@ -173,7 +177,7 @@ function DashCluster({ theme, config, caps }: BaseWidgetProps<DashClusterConfig>
             it fills the row height and its width tracks that height via the 1:1
             aspect ratio, so it reads as a square tile rather than a tall pill. */}
         <div style={{ flex: "0 0 auto", alignSelf: "center", height: "84%", aspectRatio: "1 / 1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: t.cell, borderRadius: 16, boxSizing: "border-box", overflow: "hidden" }}>
-          <div ref={gearRef} style={{ fontFamily: theme.font.family, fontWeight: 700, fontSize: "4em", lineHeight: 0.82, color: "#fff" }}>N</div>
+          <div ref={gearRef} style={{ fontFamily: theme.font.family, fontWeight: 700, fontSize: "4em", lineHeight: 0.82, color: config.gearColor ?? "#ffffff" }}>N</div>
           <div style={{ fontFamily: theme.font.label, fontSize: "0.6em", fontWeight: 600, letterSpacing: "0.22em", color: t.textDim, marginTop: 3 }}>GEAR</div>
         </div>
 
@@ -222,6 +226,7 @@ export const dashClusterDef: WidgetDefinition<DashClusterConfig> = {
     { key: "showLeds", label: "Shift lights", type: "boolean" },
     { key: "showInputs", label: "Input graph", type: "boolean" },
     { key: "showSteering", label: "Steering", type: "boolean" },
+    { key: "gearColor", label: "Gear color", type: "color", presets: GEAR_COLOR_PRESETS },
   ],
   Component: DashCluster,
 };

@@ -71,6 +71,11 @@ export type ConfigField =
   | { key: string; label: string; type: "number"; min: number; max: number; step: number }
   | { key: string; label: string; type: "enum"; options: { value: string; label: string }[] }
   /**
+   * A color value (`#rrggbb`). The settings panel shows the `presets` as
+   * swatches plus a custom color picker. Stored value is the hex string.
+   */
+  | { key: string; label: string; type: "color"; presets: { hex: string; name: string }[] }
+  /**
    * An ordered, reorderable list of toggleable info fields, each with per
    * session-type visibility. `fields` is the catalog of selectable entries (in
    * a sensible default order); the stored value is an `InfoFieldConfig[]`.

@@ -93,6 +93,45 @@ export function SettingsPanel({ instance, theme }: Props) {
     );
   };
 
+  // Compact color control: preset swatches + the native picker for a custom hex.
+  // (The manager's customize modal has the full color wheel; this on-overlay
+  // panel stays lightweight and doesn't depend on the manager stylesheet.)
+  const colorField = (f: Extract<ConfigField, { type: "color" }>) => {
+    const value = String(instance.config[f.key] ?? f.presets[0]?.hex ?? "#ffffff");
+    const set = (hex: string) => layoutStore.updateConfig(instance.instanceId, { [f.key]: hex });
+    return (
+      <div style={rowStyle} key={f.key}>
+        <span style={labelStyle}>{f.label}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, flexWrap: "wrap" }}>
+          {f.presets.map((p) => (
+            <button
+              key={p.hex}
+              title={p.name}
+              onClick={() => set(p.hex)}
+              style={{
+                width: 16,
+                height: 16,
+                padding: 0,
+                borderRadius: "50%",
+                background: p.hex,
+                cursor: "pointer",
+                border: value.toLowerCase() === p.hex.toLowerCase() ? "2px solid #fff" : "2px solid transparent",
+                boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.4)",
+              }}
+            />
+          ))}
+          <input
+            type="color"
+            title="Custom color"
+            value={/^#[0-9a-fA-F]{6}$/.test(value) ? value : "#ffffff"}
+            onChange={(e) => set(e.target.value)}
+            style={{ width: 20, height: 18, padding: 0, border: "none", background: "transparent", cursor: "pointer" }}
+          />
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div
       style={{
@@ -194,6 +233,7 @@ export function SettingsPanel({ instance, theme }: Props) {
         }
         if (f.type === "number") return num(f.key, Number(value), f);
         if (f.type === "fieldList") return fieldList(f);
+        if (f.type === "color") return colorField(f);
         // enum
         return (
           <div style={rowStyle} key={f.key}>

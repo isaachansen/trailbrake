@@ -10,6 +10,7 @@ import { SESSION_STATES, type SessionStateKey } from "../store/sessionState";
 import type { InfoFieldConfig } from "../widgets/contract";
 import { Field, Slider, Toggle } from "./ui";
 import { FieldListEditor } from "./FieldListEditor";
+import { ColorField } from "./ColorField";
 
 interface Props {
   instance: WidgetInstance;
@@ -140,6 +141,13 @@ export function WidgetConfigEditor({ instance }: Props) {
               value={value as InfoFieldConfig[] | undefined}
               onChange={(next) => setConfig({ [f.key]: next })}
             />
+          );
+        }
+        if (f.type === "color") {
+          return (
+            <Field label={f.label} key={f.key}>
+              <ColorField value={String(value ?? f.presets[0]?.hex ?? "#ffffff")} presets={f.presets} onChange={(hex) => setConfig({ [f.key]: hex })} />
+            </Field>
           );
         }
         return (

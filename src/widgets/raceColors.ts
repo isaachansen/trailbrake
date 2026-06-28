@@ -1,6 +1,15 @@
 // Visual lookups for the rich standings/relative rows, ported from the v2 design.
 // Flags are CSS gradients (cheap, no image assets); license + tyre are solid swatches.
 
+/** Preset gear-text colors offered by gear widgets (white default + red/yellow/
+ *  green), alongside a custom color picker. Shared so the choices don't drift. */
+export const GEAR_COLOR_PRESETS: { hex: string; name: string }[] = [
+  { hex: "#ffffff", name: "White" },
+  { hex: "#ff4d4d", name: "Red" },
+  { hex: "#ffd84d", name: "Yellow" },
+  { hex: "#3ddc84", name: "Green" },
+];
+
 /** Country code → flag gradient. Unknown codes fall back to a neutral swatch. */
 export const FLAG: Record<string, string> = {
   FR: "linear-gradient(90deg,#23379b 0 34%,#fff 34% 67%,#e23 67%)",

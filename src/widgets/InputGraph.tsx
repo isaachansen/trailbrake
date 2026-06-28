@@ -11,6 +11,7 @@ import { useEffect, useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
 import { useSettings } from "../store/appSettings";
 import { speedValue, speedLabel } from "./format";
+import { GEAR_COLOR_PRESETS } from "./raceColors";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface InputGraphConfig {
@@ -22,6 +23,8 @@ export interface InputGraphConfig {
   showClutch: boolean;
   /** Show a gear + speed readout (like the Dash widget). */
   showGearSpeed: boolean;
+  /** Color of the gear digit (hex). */
+  gearColor: string;
 }
 
 const defaultConfig: InputGraphConfig = {
@@ -31,6 +34,7 @@ const defaultConfig: InputGraphConfig = {
   showStats: true,
   showClutch: true,
   showGearSpeed: true,
+  gearColor: "#ffffff",
 };
 
 /** Speed normalization ceiling (m/s ≈ 330 km/h) for the speed trace. */
@@ -246,7 +250,7 @@ function InputGraph({ theme, config }: BaseWidgetProps<InputGraphConfig>) {
       {config.showGearSpeed && (
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 7, padding: "0 2px" }}>
           <div style={{ background: theme.colors.cell, borderRadius: theme.space.md, padding: "3px 12px", display: "grid", placeItems: "center" }}>
-            <div ref={gearRef} style={{ fontFamily: theme.font.family, fontWeight: 800, fontSize: "2.1em", lineHeight: 0.85, color: "#fff", minWidth: "0.6em", textAlign: "center" }}>N</div>
+            <div ref={gearRef} style={{ fontFamily: theme.font.family, fontWeight: 800, fontSize: "2.1em", lineHeight: 0.85, color: config.gearColor ?? "#ffffff", minWidth: "0.6em", textAlign: "center" }}>N</div>
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
             <span ref={speedRef} style={{ fontFamily: theme.font.family, fontWeight: 700, fontSize: "1.9em", lineHeight: 0.85, color: "#fff", fontVariantNumeric: "tabular-nums" }}>0</span>
@@ -309,6 +313,7 @@ export const inputGraphDef: WidgetDefinition<InputGraphConfig> = {
     { key: "showBars", label: "Pedal bars", type: "boolean" },
     { key: "showClutch", label: "Clutch", type: "boolean" },
     { key: "showStats", label: "Stat cells", type: "boolean" },
+    { key: "gearColor", label: "Gear color", type: "color", presets: GEAR_COLOR_PRESETS },
   ],
   Component: InputGraph,
 };
