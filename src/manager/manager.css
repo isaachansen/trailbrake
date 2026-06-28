@@ -579,51 +579,31 @@ input.input::placeholder {
   border-color: #fff;
   box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.45);
 }
-/* The custom-color swatch: a thin rainbow rim around a dark center that shows a
-   "+" (open the wheel) — or the chosen color once a custom one is active. Reads
-   as a control, not just another color chip. */
+/* The custom-color swatch is a mini color wheel: the three primaries (red,
+   yellow, blue) plus the three secondaries (orange, green, purple) as pie
+   wedges, with each boundary softly blended (a ~16° fade) rather than a hard
+   line — so it reads clearly as "open the color wheel". When a custom color is
+   active it instead shows that color + a matching rim (set inline). */
 .accent-custom {
-  display: grid;
-  place-items: center;
   background: conic-gradient(
-    from 90deg,
-    #ff2d8e, #ff5a3c, #ffb43d, #8be43a, #2fe08a, #37d4ea, #3d8bff, #9b6bff, #ff2d8e
+    from 0deg,
+    #ff4d4d 0deg 22deg,
+    #ff9a3d 38deg 82deg,
+    #ffd84d 98deg 142deg,
+    #3ddc84 158deg 202deg,
+    #3d8bff 218deg 262deg,
+    #a86bff 278deg 322deg,
+    #ff4d4d 338deg 360deg
   );
-}
-.accent-custom .accent-custom-dot {
-  position: relative;
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: var(--panel-flat);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
-  transition: background 0.12s ease;
-}
-/* White "+" (two crisp bars) — shown only while no custom color is chosen. */
-.accent-custom:not(.on) .accent-custom-dot::before,
-.accent-custom:not(.on) .accent-custom-dot::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  background: #fff;
-  border-radius: 1px;
-}
-.accent-custom:not(.on) .accent-custom-dot::before {
-  width: 7px;
-  height: 1.6px;
-  transform: translate(-50%, -50%);
-}
-.accent-custom:not(.on) .accent-custom-dot::after {
-  width: 1.6px;
-  height: 7px;
-  transform: translate(-50%, -50%);
+  /* A transparent border + border-radius makes Chromium clip the conic into a
+     rounded SQUARE (and the inherited inset ring does the same), so drop both —
+     the conic alone clips to a clean circle. The open/selected rings below use
+     an OUTSET shadow instead of the border. */
+  border: none;
+  box-shadow: none;
 }
 .accent-custom.open {
-  border-color: #fff;
-}
-.accent-custom:hover {
-  transform: scale(1.12);
+  box-shadow: 0 0 0 2px #fff;
 }
 
 /* ---------- custom color wheel (popover) ---------- */

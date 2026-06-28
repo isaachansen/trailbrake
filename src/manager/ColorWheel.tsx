@@ -70,10 +70,14 @@ export function ColorWheel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
-  // Close on a click outside the popover.
+  // Close on a click outside the popover. Ignore the trigger swatch itself so its
+  // own click handles the toggle (otherwise this closes and the toggle reopens).
   useEffect(() => {
     const onDown = (e: PointerEvent) => {
-      if (popRef.current && !popRef.current.contains(e.target as Node)) onClose();
+      const target = e.target as Element | null;
+      if (popRef.current && !popRef.current.contains(target) && !target?.closest?.("[data-accent-trigger]")) {
+        onClose();
+      }
     };
     document.addEventListener("pointerdown", onDown);
     return () => document.removeEventListener("pointerdown", onDown);
