@@ -8,8 +8,10 @@ import { useState } from "react";
 import { defaultTheme } from "../theme/theme";
 import { StoreProvider } from "../store/storeContext";
 import { useCaps } from "../store/hooks";
+import { useSettings } from "../store/appSettings";
 import { ScreenLayerContext } from "../components/screenLayer";
 import { FitContent } from "../components/FitContent";
+import { glassChrome, GlassSpecular } from "../components/liquidGlass";
 import { previewStoreFor } from "./previewStore";
 import type { WidgetDefinition } from "../widgets/contract";
 
@@ -40,6 +42,7 @@ export function WidgetPreview({ def, maxW, maxH, config, opacity = 1, widgetScal
   // mode) — match the overlay and drop the glass chrome so the preview shows just
   // the effect, not an empty box.
   const transparent = def.transparentPanel?.(cfg) ?? false;
+  const glass = !transparent && useSettings().panelStyle === "liquid";
 
   // Layer for screen-effect widgets (Spotter edge glow) to portal into. It must
   // represent the *screen*, not the widget's own (overflow-clipped) panel — so it
@@ -63,19 +66,22 @@ export function WidgetPreview({ def, maxW, maxH, config, opacity = 1, widgetScal
           opacity,
           ...(transparent
             ? {}
-            : {
-                background: theme.colors.surface,
-                border: `1px solid ${theme.colors.surfaceBorder}`,
-                borderRadius: theme.radius,
-                boxShadow: theme.panelShadow,
-                backdropFilter: theme.panelBlur,
-                WebkitBackdropFilter: theme.panelBlur,
-              }),
+            : glass
+              ? glassChrome()
+              : {
+                  background: theme.colors.surface,
+                  border: `1px solid ${theme.colors.surfaceBorder}`,
+                  borderRadius: theme.radius,
+                  boxShadow: theme.panelShadow,
+                  backdropFilter: theme.panelBlur,
+                  WebkitBackdropFilter: theme.panelBlur,
+                }),
         }}
       >
+        {glass && <GlassSpecular />}
         <StoreProvider store={previewStoreFor(def.id)}>
           <ScreenLayerContext.Provider value={{ el: layer, preview: true, fullScreen: true }}>
-            <div className="wp-body">
+            <div className="wp-body" style={{ position: "relative", zIndex: 1 }}>
               <PreviewInner def={def} config={cfg} />
             </div>
           </ScreenLayerContext.Provider>

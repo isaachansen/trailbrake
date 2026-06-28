@@ -10,12 +10,14 @@ import { layoutStore } from "./layout";
 import { settingsStore } from "./appSettings";
 import { isTauri } from "./transport";
 import type { UnitSystem } from "../widgets/format";
+import type { PanelStyle } from "./appSettings";
 
 const NONCE = Math.random().toString(36).slice(2);
 const EVT_LAYOUT = "overlay://layout-sync";
 const EVT_SELECT = "overlay://select-sync";
 const EVT_UNITS = "overlay://units-sync";
 const EVT_PREVIEW_MOCK = "overlay://preview-mock-sync";
+const EVT_PANEL_STYLE = "overlay://panel-style-sync";
 
 export async function initSync(): Promise<() => void> {
   if (!isTauri()) return () => {};
@@ -26,12 +28,14 @@ export async function initSync(): Promise<() => void> {
   layoutStore.setSelectionBroadcaster((id) => void emit(EVT_SELECT, { nonce: NONCE, id }));
   settingsStore.setUnitsBroadcaster((u) => void emit(EVT_UNITS, { nonce: NONCE, u }));
   settingsStore.setPreviewMockBroadcaster((on) => void emit(EVT_PREVIEW_MOCK, { nonce: NONCE, on }));
+  settingsStore.setPanelStyleBroadcaster((s) => void emit(EVT_PANEL_STYLE, { nonce: NONCE, s }));
 
-  // Start this window in sync with the persisted units + preview-mock flag (the
-  // overlay window doesn't run settingsStore.init(), so it would otherwise stay
-  // on the defaults).
+  // Start this window in sync with the persisted units + preview-mock + panel
+  // style (the overlay window doesn't run settingsStore.init(), so it would
+  // otherwise stay on the defaults).
   await settingsStore.loadUnits();
   await settingsStore.loadPreviewMock();
+  await settingsStore.loadPanelStyle();
 
   const unLayout = await listen<{ nonce: string; blob: string }>(EVT_LAYOUT, (e) => {
     if (e.payload.nonce === NONCE) return;
@@ -49,15 +53,21 @@ export async function initSync(): Promise<() => void> {
     if (e.payload.nonce === NONCE) return;
     settingsStore.applyPreviewMock(e.payload.on);
   });
+  const unPanelStyle = await listen<{ nonce: string; s: PanelStyle }>(EVT_PANEL_STYLE, (e) => {
+    if (e.payload.nonce === NONCE) return;
+    settingsStore.applyPanelStyle(e.payload.s);
+  });
 
   return () => {
     layoutStore.setBroadcaster(null);
     layoutStore.setSelectionBroadcaster(null);
     settingsStore.setUnitsBroadcaster(null);
     settingsStore.setPreviewMockBroadcaster(null);
+    settingsStore.setPanelStyleBroadcaster(null);
     unLayout();
     unSelect();
     unUnits();
     unPreviewMock();
+    unPanelStyle();
   };
 }

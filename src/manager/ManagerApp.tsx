@@ -10,6 +10,7 @@ import { layoutStore } from "../store/layout";
 import { settingsStore, useSettings } from "../store/appSettings";
 import { controls } from "../store/controls";
 import { accentVars } from "./accent";
+import { LiquidGlassFilter } from "../components/liquidGlass";
 import { NavRail, TopBar, type Page } from "./shell";
 import { WidgetsPage } from "./pages/WidgetsPage";
 import { ProfilesPage } from "./pages/ProfilesPage";
@@ -37,6 +38,7 @@ export default function ManagerApp() {
 
   return (
     <div className="mgr" style={accentVars(settings.accentColor)}>
+      {settings.panelStyle === "liquid" && <LiquidGlassFilter />}
       <NavRail page={page} onNavigate={setPage} />
       <div className="mgr-main">
         <TopBar page={page} />

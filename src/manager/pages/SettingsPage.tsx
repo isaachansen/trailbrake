@@ -149,6 +149,19 @@ export function SettingsPage() {
             ))}
           </div>
         </Field>
+        <Field label="Panel style">
+          <div className="state-toggles">
+            {([["flat", "Flat glass"], ["liquid", "Liquid Glass"]] as const).map(([key, label]) => (
+              <button
+                key={key}
+                className={`state-chip${settings.panelStyle === key ? " on" : ""}`}
+                onClick={() => settingsStore.setPanelStyle(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </Field>
         <Field label="Accent color">
           <div className="accent-swatches">
             {ACCENT_PRESETS.map((p) => (
@@ -167,6 +180,7 @@ export function SettingsPage() {
               return (
                 <button
                   type="button"
+                  data-accent-trigger
                   title="Custom color"
                   aria-label="Custom color"
                   className={`accent-swatch accent-custom${isCustom ? " on" : ""}${wheelOpen ? " open" : ""}`}
@@ -182,9 +196,7 @@ export function SettingsPage() {
                       : undefined
                   }
                   onClick={() => setWheelOpen((v) => !v)}
-                >
-                  {!isCustom && <span className="accent-custom-dot" />}
-                </button>
+                />
               );
             })()}
             {wheelOpen && (

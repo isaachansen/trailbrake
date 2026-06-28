@@ -18,6 +18,7 @@ import { layoutStore, useLayout } from "./store/layout";
 import { getWidgetDef } from "./widgets/registry";
 import { ScreenLayerContext } from "./components/screenLayer";
 import { WidgetHost } from "./components/WidgetHost";
+import { LiquidGlassFilter } from "./components/liquidGlass";
 import { Toolbar } from "./components/Toolbar";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { PerfHud } from "./perf/PerfHud";
@@ -136,6 +137,10 @@ export default function OverlayApp() {
         if (editing && e.target === e.currentTarget) layoutStore.select(null);
       }}
     >
+      {/* Liquid Glass refraction filter — injected once when the style is on, so
+          every widget panel can reference it (see WidgetHost / liquidGlass). */}
+      {settings.panelStyle === "liquid" && <LiquidGlassFilter />}
+
       {/* Screen-effect layer (under the widgets): the Spotter edge glow portals
           its full-height red side fades here when a car is alongside. */}
       <div ref={setScreenLayer} style={{ position: "absolute", inset: 0, pointerEvents: "none" }} />

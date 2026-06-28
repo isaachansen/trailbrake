@@ -9,6 +9,9 @@ import { loadSettings, saveSettings } from "./persistence";
 import { controls, type VrBackendKind, type VrGlobals } from "./controls";
 import type { UnitSystem } from "../widgets/format";
 
+/** Widget panel appearance: the flat-glass default, or the Liquid Glass style. */
+export type PanelStyle = "flat" | "liquid";
+
 /** Persisted VR placement settings (mirror of `VrGlobals` + enable/backend). */
 export interface VrSettings {
   enabled: boolean;
@@ -34,6 +37,8 @@ export interface AppSettings {
   /** Fill widgets with synthetic (mock) telemetry while the overlay is shown
    *  (preview/edit) but no sim is feeding it. Real telemetry always takes over. */
   previewMock: boolean;
+  /** Widget panel appearance — flat glass (default) or Liquid Glass. */
+  panelStyle: PanelStyle;
   /** VR compositor placement + enable. */
   vr: VrSettings;
 }
@@ -54,6 +59,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   units: "metric",
   accentColor: "#ff2d8e",
   previewMock: true,
+  panelStyle: "flat",
   vr: { ...DEFAULT_VR_SETTINGS },
 };
 
@@ -71,6 +77,7 @@ const listeners = new Set<() => void>();
 // wires this broadcaster so a change propagates across windows.
 let unitsBroadcaster: ((u: UnitSystem) => void) | null = null;
 let previewMockBroadcaster: ((on: boolean) => void) | null = null;
+let panelStyleBroadcaster: ((s: PanelStyle) => void) | null = null;
 
 function emit() {
   settings = { ...settings };
@@ -237,6 +244,36 @@ export const settingsStore = {
     try {
       const parsed = JSON.parse(raw) as Partial<AppSettings>;
       if (typeof parsed.previewMock === "boolean") this.applyPreviewMock(parsed.previewMock);
+    } catch {
+      /* ignore */
+    }
+  },
+
+  // --- cross-window panel-style sync (same pattern as units) ---
+
+  /** Set the widget panel style; synced cross-window so the overlay restyles live. */
+  setPanelStyle(s: PanelStyle) {
+    settings = { ...settings, panelStyle: s };
+    emit();
+    schedulePersist();
+    panelStyleBroadcaster?.(s);
+  },
+  setPanelStyleBroadcaster(fn: ((s: PanelStyle) => void) | null) {
+    panelStyleBroadcaster = fn;
+  },
+  /** Apply a panel-style change received from another window (no persist / re-broadcast). */
+  applyPanelStyle(s: PanelStyle) {
+    if (settings.panelStyle === s) return;
+    settings = { ...settings, panelStyle: s };
+    emit();
+  },
+  /** Load just the persisted panel style (overlay window doesn't run `init`). */
+  async loadPanelStyle() {
+    const raw = await loadSettings();
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as Partial<AppSettings>;
+      if (parsed.panelStyle === "flat" || parsed.panelStyle === "liquid") this.applyPanelStyle(parsed.panelStyle);
     } catch {
       /* ignore */
     }

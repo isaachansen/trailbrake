@@ -5,7 +5,9 @@
 import { useRef } from "react";
 import { layoutStore, type WidgetInstance } from "../store/layout";
 import { getWidgetDef } from "../widgets/registry";
+import { useSettings } from "../store/appSettings";
 import { FitContent } from "./FitContent";
+import { glassChrome, GLASS_SHADOW, GLASS_BORDER, GlassSpecular } from "./liquidGlass";
 import type { Capabilities } from "../store/types";
 import type { SessionStateKey } from "../store/sessionState";
 import type { Theme } from "../theme/theme";
@@ -23,6 +25,7 @@ interface Props {
 export function WidgetHost({ instance, editing, selected, theme, caps, sessionState }: Props) {
   const def = getWidgetDef(instance.type);
   const dragRef = useRef<{ mode: "move" | "resize"; sx: number; sy: number; ox: number; oy: number } | null>(null);
+  const panelStyle = useSettings().panelStyle;
 
   if (!def) return null;
 
@@ -40,6 +43,8 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
   // edges-only) and want no panel of their own. Outside edit mode we drop all
   // chrome so nothing shows; in edit mode the chrome stays so it's selectable.
   const chromeless = (def.transparentPanel?.(instance.config as any) ?? false) && !editing;
+  // Liquid Glass panel style (opt-in via settings). Not for chromeless widgets.
+  const glass = !chromeless && panelStyle === "liquid";
 
   // Capability-based hiding (§3): if the active sim can't feed this widget, hide
   // it entirely in race mode; in edit mode show a placeholder so the user knows.
@@ -100,25 +105,39 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
         width: instance.size.w,
         height: instance.size.h,
         fontSize: theme.font.sizeBase * eff.scale,
-        background: chromeless ? "transparent" : surfaceBg,
-        backdropFilter: chromeless ? "none" : theme.panelBlur,
-        WebkitBackdropFilter: chromeless ? "none" : theme.panelBlur,
-        border: editing
-          ? `1px ${selected ? "solid" : "dashed"} ${selected ? theme.colors.edit : theme.colors.surfaceBorder}`
-          : chromeless
-            ? "none"
-            : `1px solid ${theme.colors.surfaceBorder}`,
-        borderRadius: theme.radius,
         boxSizing: "border-box",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
         pointerEvents: editing ? "auto" : "none",
+        // Panel surface: flat glass (default) or Liquid Glass.
+        ...(glass
+          ? glassChrome(panelAlpha)
+          : {
+              background: chromeless ? "transparent" : surfaceBg,
+              backdropFilter: chromeless ? "none" : theme.panelBlur,
+              WebkitBackdropFilter: chromeless ? "none" : theme.panelBlur,
+              borderRadius: theme.radius,
+            }),
+        border: editing
+          ? `1px ${selected ? "solid" : "dashed"} ${selected ? theme.colors.edit : theme.colors.surfaceBorder}`
+          : chromeless
+            ? "none"
+            : glass
+              ? GLASS_BORDER
+              : `1px solid ${theme.colors.surfaceBorder}`,
         // The selection ring only belongs in edit mode — never leave it on a widget
         // after "Done editing".
-        boxShadow: editing && selected ? `${theme.panelShadow}, 0 0 0 1px ${theme.colors.edit}` : chromeless ? "none" : theme.panelShadow,
+        boxShadow: editing && selected
+          ? `${chromeless ? "none" : glass ? GLASS_SHADOW : theme.panelShadow}, 0 0 0 1px ${theme.colors.edit}`
+          : chromeless
+            ? "none"
+            : glass
+              ? GLASS_SHADOW
+              : theme.panelShadow,
       }}
     >
+      {glass && <GlassSpecular />}
       {editing && (
         <div
           onPointerDown={beginMove}
@@ -178,7 +197,7 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
         </div>
       )}
 
-      <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
+      <div style={{ position: "relative", zIndex: 1, flex: 1, minHeight: 0 }}>
         {unsupported ? (
           <div
             style={{

@@ -23,6 +23,7 @@ import { StoreProvider } from "../store/storeContext";
 import { useCaps } from "../store/hooks";
 import { ScreenLayerContext } from "../components/screenLayer";
 import { FitContent } from "../components/FitContent";
+import { glassChrome, GlassSpecular, LiquidGlassFilter } from "../components/liquidGlass";
 import { previewStoreFor, startPreviewMock } from "../manager/previewStore";
 import { allWidgetDefs, getWidgetDef } from "../widgets/registry";
 import { widgetMeta } from "../manager/widgetMeta";
@@ -67,6 +68,7 @@ function GalleryPanel({
   opacity = 1,
   widgetScale = 1,
   config,
+  glass = false,
 }: {
   def: WidgetDefinition;
   w: number;
@@ -74,12 +76,14 @@ function GalleryPanel({
   opacity?: number;
   widgetScale?: number;
   config?: Record<string, unknown>;
+  glass?: boolean;
 }) {
   const cfg = config ?? (def.defaultConfig as Record<string, unknown>);
   const transparent = def.transparentPanel?.(cfg) ?? false;
   // A layer OUTSIDE the clipped panel for screen-effect widgets (e.g. Spotter
   // edge glow) to portal into — mirrors WidgetPreview / the real overlay host.
   const [layer, setLayer] = useState<HTMLDivElement | null>(null);
+  const useGlass = glass && !transparent;
 
   return (
     <div data-widget-shot style={{ width: w, height: h, position: "relative" }}>
@@ -99,19 +103,22 @@ function GalleryPanel({
           opacity,
           ...(transparent
             ? {}
-            : {
-                background: theme.colors.surface,
-                border: `1px solid ${theme.colors.surfaceBorder}`,
-                borderRadius: theme.radius,
-                boxShadow: theme.panelShadow,
-                backdropFilter: theme.panelBlur,
-                WebkitBackdropFilter: theme.panelBlur,
-              }),
+            : useGlass
+              ? glassChrome()
+              : {
+                  background: theme.colors.surface,
+                  border: `1px solid ${theme.colors.surfaceBorder}`,
+                  borderRadius: theme.radius,
+                  boxShadow: theme.panelShadow,
+                  backdropFilter: theme.panelBlur,
+                  WebkitBackdropFilter: theme.panelBlur,
+                }),
         }}
       >
+        {useGlass && <GlassSpecular />}
         <StoreProvider store={previewStoreFor(def.id)}>
           <ScreenLayerContext.Provider value={{ el: layer, preview: true, fullScreen: false }}>
-            <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
+            <div style={{ position: "relative", zIndex: 1, flex: 1, minHeight: 0 }}>
               <Inner def={def} config={cfg} />
             </div>
           </ScreenLayerContext.Provider>
@@ -212,7 +219,20 @@ function Page({ children, bg }: { children: ReactNode; bg: string }) {
 export default function WidgetGallery() {
   const params = new URLSearchParams(window.location.search);
   const widgetId = params.get("widget");
-  const bg = BACKDROPS[(params.get("bg") as BgKey) ?? "track"] ?? BACKDROPS.track;
+  // PROTOTYPE flag: render the widget with the Liquid Glass chrome over a vivid
+  // scene (so the refraction/blur reads). `?gallery&widget=relative&glass=1`.
+  const glass = params.has("glass");
+  // A colourful "race scene" so the glass has something to refract — coloured
+  // light blobs over an asphalt-stripe pattern.
+  const SCENE_BG =
+    "radial-gradient(38% 55% at 18% 22%, rgba(61,139,255,0.85), transparent 60%)," +
+    "radial-gradient(46% 50% at 84% 16%, rgba(255,45,142,0.8), transparent 58%)," +
+    "radial-gradient(55% 60% at 72% 92%, rgba(47,224,138,0.7), transparent 58%)," +
+    "radial-gradient(48% 50% at 8% 90%, rgba(255,180,61,0.75), transparent 58%)," +
+    "repeating-linear-gradient(115deg, #15171d 0 26px, #0e1014 26px 52px), #0c0d11";
+  // `scene=1` forces the vivid scene without the glass chrome (for before/after).
+  const scene = glass || params.has("scene");
+  const bg = scene ? SCENE_BG : BACKDROPS[(params.get("bg") as BgKey) ?? "track"] ?? BACKDROPS.track;
   const sizeMode = params.get("size") ?? "default";
   const w = params.get("w") ? Number(params.get("w")) : undefined;
   const h = params.get("h") ? Number(params.get("h")) : undefined;
@@ -275,6 +295,7 @@ export default function WidgetGallery() {
     }
     return (
       <Page bg={bg}>
+        {glass && <LiquidGlassFilter />}
         <div
           style={{
             minHeight: "100%",
@@ -292,6 +313,7 @@ export default function WidgetGallery() {
               opacity={opacity}
               widgetScale={widgetScale}
               config={cfg}
+              glass={glass}
             />
           )}
         </div>
