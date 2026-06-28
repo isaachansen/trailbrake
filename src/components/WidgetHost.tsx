@@ -232,10 +232,13 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
             position: "absolute",
             right: 0,
             bottom: 0,
-            width: 14,
-            height: 14,
+            width: 20,
+            height: 20,
             cursor: "nwse-resize",
-            background: `linear-gradient(135deg, transparent 50%, ${selected ? theme.colors.edit : theme.colors.surfaceBorder} 50%)`,
+            // Above the content layer (which sits at zIndex 1 over the glass
+            // specular) so the handle is actually grabbable, not covered.
+            zIndex: 2,
+            background: `linear-gradient(135deg, transparent 55%, ${selected ? theme.colors.edit : theme.colors.surfaceBorder} 55%)`,
           }}
         />
       )}
