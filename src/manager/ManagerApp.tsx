@@ -7,8 +7,9 @@ import { useEffect, useState } from "react";
 import "./manager.css";
 import { initTransport } from "../store/transport";
 import { layoutStore } from "../store/layout";
-import { settingsStore } from "../store/appSettings";
+import { settingsStore, useSettings } from "../store/appSettings";
 import { controls } from "../store/controls";
+import { accentVars } from "./accent";
 import { NavRail, TopBar, type Page } from "./shell";
 import { WidgetsPage } from "./pages/WidgetsPage";
 import { ProfilesPage } from "./pages/ProfilesPage";
@@ -16,6 +17,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 
 export default function ManagerApp() {
   const [page, setPage] = useState<Page>("widgets");
+  const settings = useSettings();
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
@@ -34,7 +36,7 @@ export default function ManagerApp() {
   }, []);
 
   return (
-    <div className="mgr">
+    <div className="mgr" style={accentVars(settings.accentColor)}>
       <NavRail page={page} onNavigate={setPage} />
       <div className="mgr-main">
         <TopBar page={page} />

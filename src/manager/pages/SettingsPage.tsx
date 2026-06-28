@@ -9,6 +9,7 @@ import { isTauri } from "../../store/transport";
 import { layoutStore, useLayout } from "../../store/layout";
 import { SESSION_STATES } from "../../store/sessionState";
 import { Field, Slider, Toggle } from "../ui";
+import { ACCENT_PRESETS } from "../accent";
 import { SoftwareUpdates } from "./SoftwareUpdates";
 import { BuyMeACoffee } from "../BuyMeACoffee";
 
@@ -144,6 +145,38 @@ export function SettingsPage() {
                 {label}
               </button>
             ))}
+          </div>
+        </Field>
+        <Field label="Accent color">
+          <div className="accent-swatches">
+            {ACCENT_PRESETS.map((p) => (
+              <button
+                key={p.hex}
+                type="button"
+                title={p.name}
+                aria-label={p.name}
+                className={`accent-swatch${settings.accentColor.toLowerCase() === p.hex.toLowerCase() ? " on" : ""}`}
+                style={{ background: p.hex }}
+                onClick={() => settingsStore.setAccentColor(p.hex)}
+              />
+            ))}
+            <label
+              title="Custom color"
+              className={`accent-swatch accent-custom${
+                ACCENT_PRESETS.some((p) => p.hex.toLowerCase() === settings.accentColor.toLowerCase()) ? "" : " on"
+              }`}
+              style={
+                ACCENT_PRESETS.some((p) => p.hex.toLowerCase() === settings.accentColor.toLowerCase())
+                  ? undefined
+                  : { background: settings.accentColor }
+              }
+            >
+              <input
+                type="color"
+                value={settings.accentColor}
+                onChange={(e) => settingsStore.setAccentColor(e.target.value)}
+              />
+            </label>
           </div>
         </Field>
         <Field label="Overlay monitor">

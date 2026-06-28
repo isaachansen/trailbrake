@@ -62,7 +62,7 @@
   box-sizing: border-box;
 }
 .mgr ::selection {
-  background: rgba(255, 45, 142, 0.3);
+  background: var(--accent-line);
 }
 
 /* ---------- nav rail ---------- */
@@ -196,7 +196,7 @@
 }
 .pill.edit .dot {
   background: var(--accent);
-  box-shadow: 0 0 0 3px rgba(255, 45, 142, 0.2);
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 @keyframes pulse {
   0%, 100% { opacity: 1; }
@@ -340,7 +340,7 @@
 }
 .toggle.on {
   background: var(--accent-soft);
-  border-color: rgba(255, 45, 142, 0.5);
+  border-color: var(--accent-line);
 }
 .toggle.on::after {
   transform: translateX(18px);
@@ -550,8 +550,50 @@ input.input::placeholder {
 }
 .state-chip.on {
   background: var(--accent-soft);
-  border-color: rgba(255, 45, 142, 0.5);
+  border-color: var(--accent-line);
   color: #fff;
+}
+
+/* ---------- accent-color swatches (Settings) ---------- */
+.accent-swatches {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.accent-swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+  transition: transform 0.08s ease, box-shadow 0.12s ease;
+}
+.accent-swatch:hover {
+  transform: scale(1.12);
+}
+.accent-swatch.on {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.45);
+}
+/* The custom-color swatch wraps a hidden native color input; show a rainbow when
+   it isn't the active choice, the chosen color (inline style) when it is. */
+.accent-custom {
+  position: relative;
+  overflow: hidden;
+  background: conic-gradient(#ff2d8e, #ff8a3d, #ffb43d, #2fe08a, #37d4ea, #3d8bff, #b06bff, #ff2d8e);
+}
+.accent-custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  border: none;
+  padding: 0;
+  cursor: pointer;
 }
 
 /* ---------- field-list editor (reorderable info fields) ---------- */

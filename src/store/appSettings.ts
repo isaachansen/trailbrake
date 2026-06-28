@@ -28,6 +28,9 @@ export interface AppSettings {
   monitorIndex: number | null;
   /** Display units across all widgets (speed/fuel/temp). */
   units: UnitSystem;
+  /** Accent color for the manager UI (hex, e.g. "#ff2d8e"). Drives the `--accent`
+   *  family of CSS variables; persisted so it survives a reopen. */
+  accentColor: string;
   /** Fill widgets with synthetic (mock) telemetry while the overlay is shown
    *  (preview/edit) but no sim is feeding it. Real telemetry always takes over. */
   previewMock: boolean;
@@ -49,6 +52,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoShow: true,
   monitorIndex: null,
   units: "metric",
+  accentColor: "#ff2d8e",
   previewMock: true,
   vr: { ...DEFAULT_VR_SETTINGS },
 };
@@ -176,6 +180,14 @@ export const settingsStore = {
     emit();
     schedulePersist();
     unitsBroadcaster?.(units);
+  },
+
+  /** Accent color for the manager UI (hex). Persisted; the manager applies it as
+   *  CSS variables (see `ManagerApp`). */
+  setAccentColor(hex: string) {
+    settings = { ...settings, accentColor: hex };
+    emit();
+    schedulePersist();
   },
 
   // --- cross-window units sync (wired by the sync module in Tauri) ---
