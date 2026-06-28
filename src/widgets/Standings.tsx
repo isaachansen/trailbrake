@@ -372,11 +372,34 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
   );
 }
 
+// Narrowest box (design px, scale 1) that fits the columns the given config
+// enables, so the grid never overflows/clips. The em-widths mirror the column
+// template built in <Standings> above; rows render at the root's 0.92em of the
+// 14px base, hence EM = 0.92 × 14. The data-driven delta/number columns are
+// assumed present (they almost always are) so the floor stays safe.
+function standingsMinWidth(config: StandingsConfig): number {
+  const EM = 0.92 * 14;
+  const colEms = [2.1, 1.8, 2.3]; // pos · delta · number
+  if (config.showCarIcon) colEms.push(2);
+  if (config.showFlag) colEms.push(1.4);
+  colEms.push(6); // driver name (minmax(6em,…) lower bound)
+  if (config.showLicense) colEms.push(4.1);
+  if (config.showIrating) colEms.push(3.9);
+  colEms.push(2.9); // gap
+  if (config.showInterval) colEms.push(2.7);
+  if (config.showLastLap) colEms.push(4.4);
+  if (config.showBest) colEms.push(4.4);
+  if (config.showTyre) colEms.push(1.8);
+  const sumEm = colEms.reduce((a, b) => a + b, 0) + 0.6 * (colEms.length - 1) /* col gaps */ + 1.4 /* 0.7em PADX ×2 */;
+  return Math.ceil(sumEm * EM + 10 /* 5px root padding ×2 */);
+}
+
 export const standingsDef: WidgetDefinition<StandingsConfig> = {
   id: "standings",
   name: "Standings",
-  defaultSize: { w: 620, h: 360 },
+  defaultSize: { w: 660, h: 360 },
   minSize: { w: 320, h: 140 },
+  minContentWidth: standingsMinWidth,
   defaultConfig,
   requiredPaths: ["slow"],
   requiredCapabilities: ["relativeGaps"],

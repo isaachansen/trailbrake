@@ -75,8 +75,11 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
     if (d.mode === "move") {
       layoutStore.updateInstance(instance.instanceId, { position: { x: Math.max(0, d.ox + dx), y: Math.max(0, d.oy + dy) } });
     } else {
+      // Content-aware floor (tracks enabled columns × scale), so the handle stops
+      // before the widget would clip/squish rather than at a fixed minimum.
+      const min = layoutStore.minSizeFor(instance);
       layoutStore.updateInstance(instance.instanceId, {
-        size: { w: Math.max(def.minSize.w, d.ox + dx), h: Math.max(def.minSize.h, d.oy + dy) },
+        size: { w: Math.max(min.w, d.ox + dx), h: Math.max(min.h, d.oy + dy) },
       });
     }
   };

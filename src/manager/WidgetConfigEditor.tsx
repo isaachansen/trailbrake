@@ -67,7 +67,8 @@ export function WidgetConfigEditor({ instance }: Props) {
       const deltaDesign = def.contentHeight(next) - def.contentHeight(instance.config);
       if (deltaDesign !== 0) {
         const eff = layoutStore.getEffective(instance);
-        const h = Math.max(def.minSize.h, Math.round(instance.size.h + deltaDesign * eff.scale));
+        const minH = layoutStore.minSizeFor(instance).h;
+        const h = Math.max(minH, Math.round(instance.size.h + deltaDesign * eff.scale));
         setInstance({ size: { w: instance.size.w, h } });
       }
     }

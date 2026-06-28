@@ -94,6 +94,16 @@ export interface WidgetDefinition<C = Record<string, unknown>> {
   /** Initial box size when first added. */
   defaultSize: { w: number; h: number };
   minSize: { w: number; h: number };
+  /**
+   * Optional content-aware minimum *width* (in design px, at scale 1) for the
+   * given config. Widgets with em-based columns (Standings, Relative) clip or
+   * squish their data when the box is narrower than the columns they're showing,
+   * so this returns the narrowest box that still fits the currently-enabled
+   * columns. The host clamps resize/scale to this × the effective scale, so the
+   * box can never be dragged or scaled into a squished state. Falls back to
+   * `minSize.w` when absent.
+   */
+  minContentWidth?: (config: C) => number;
   defaultConfig: C;
   /** Which store paths this widget reads — enforces the fast/slow split. */
   requiredPaths: DataPath[];

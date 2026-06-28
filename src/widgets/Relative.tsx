@@ -408,11 +408,30 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
   );
 }
 
+// Narrowest box (design px, scale 1) that fits the columns the given config
+// enables, so the row grid never overflows/clips. The em-widths mirror the
+// `cols` template built in <Relative> above; rows render at the 14px base, so
+// EM = 14.
+function relativeMinWidth(config: RelativeConfig): number {
+  const EM = 14;
+  const colEms = [2]; // pos
+  if (config.showFlag) colEms.push(1.3);
+  if (config.showCarIcon) colEms.push(2);
+  colEms.push(3); // driver name (minmax(3em,…) lower bound)
+  if (config.showLicense) colEms.push(4.2);
+  if (config.showIrating) colEms.push(2.7);
+  if (config.showTyre) colEms.push(2);
+  colEms.push(3.1); // gap
+  const sumEm = colEms.reduce((a, b) => a + b, 0) + 0.8 * (colEms.length - 1) /* col gaps */ + 1.2 /* 0.6em row padding ×2 */;
+  return Math.ceil(sumEm * EM + 14 /* 7px root padding ×2 */);
+}
+
 export const relativeDef: WidgetDefinition<RelativeConfig> = {
   id: "relative",
   name: "Relative",
   defaultSize: { w: 400, h: 250 },
   minSize: { w: 280, h: 110 },
+  minContentWidth: relativeMinWidth,
   defaultConfig,
   requiredPaths: ["slow"],
   requiredCapabilities: ["relativeGaps"],

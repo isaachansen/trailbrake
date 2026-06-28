@@ -69,6 +69,33 @@ interface LayoutState {
   loaded: boolean;
 }
 
+/** A widget's effective scale (its own, or the inherited global default). */
+function scaleOf(inst: WidgetInstance, defaults: OverlayDefaults): number {
+  return inst.useGeneralScale ? defaults.scale : inst.scale;
+}
+
+/**
+ * Smallest box (real px) that keeps a widget's content un-squished at its
+ * effective scale. Width is content-aware (`minContentWidth`, which tracks the
+ * columns currently enabled) and height is the definition floor; both scale with
+ * the font, since the widgets lay out in em. Used to clamp resize and scale so a
+ * widget can never be shrunk/scaled into a clipped or squished state.
+ */
+function minSizePx(inst: WidgetInstance, defaults: OverlayDefaults): { w: number; h: number } {
+  const def = getWidgetDef(inst.type);
+  if (!def) return { w: 60, h: 40 };
+  const scale = scaleOf(inst, defaults);
+  const baseW = def.minContentWidth?.(inst.config as any) ?? def.minSize.w;
+  return { w: Math.ceil(baseW * scale), h: Math.ceil(def.minSize.h * scale) };
+}
+
+/** Grow `inst`'s box up to its minimum if it's smaller; otherwise return as-is. */
+function clampSize(inst: WidgetInstance, defaults: OverlayDefaults): WidgetInstance {
+  const min = minSizePx(inst, defaults);
+  if (inst.size.w >= min.w && inst.size.h >= min.h) return inst;
+  return { ...inst, size: { w: Math.max(inst.size.w, min.w), h: Math.max(inst.size.h, min.h) } };
+}
+
 function normalizeDefaults(d: Partial<OverlayDefaults> | undefined): OverlayDefaults {
   return {
     opacity: d?.opacity ?? DEFAULT_DEFAULTS.opacity,
@@ -192,14 +219,14 @@ function replaceCurrent(next: Layout) {
 /// default config into the saved one (so options added since the layout was
 /// saved get sensible defaults instead of `undefined`), and drop widget types
 /// that no longer exist.
-function normalizeProfiles(profiles: Record<string, Layout>): Record<string, Layout> {
+function normalizeProfiles(profiles: Record<string, Layout>, defaults: OverlayDefaults): Record<string, Layout> {
   const out: Record<string, Layout> = {};
   for (const [name, layout] of Object.entries(profiles)) {
     const widgets = (layout?.widgets ?? [])
       .map((w) => {
         const def = getWidgetDef(w.type);
         if (!def) return null;
-        return {
+        const inst: WidgetInstance = {
           ...w,
           showIn: migrateShowIn((w as { showIn?: unknown }).showIn),
           useGeneralOpacity: w.useGeneralOpacity ?? true,
@@ -208,6 +235,9 @@ function normalizeProfiles(profiles: Record<string, Layout>): Record<string, Lay
           vrDepth: typeof w.vrDepth === "number" ? w.vrDepth : 0,
           config: { ...structuredClone(def.defaultConfig), ...(w.config ?? {}) },
         };
+        // Heal layouts saved before content-aware minimums existed: a widget
+        // stored too narrow for its columns is grown so it loads un-squished.
+        return clampSize(inst, defaults);
       })
       .filter((w): w is WidgetInstance => w !== null);
     out[name] = { name: layout?.name ?? name, widgets };
@@ -242,7 +272,7 @@ export const layoutStore = {
       const stillThere = blob.profiles[active]?.widgets?.some((w) => w.instanceId === state.selectedId);
       state = {
         active,
-        profiles: normalizeProfiles(blob.profiles),
+        profiles: normalizeProfiles(blob.profiles, normalizeDefaults(blob.defaults)),
         carProfiles: blob.carProfiles ?? {},
         defaults: normalizeDefaults(blob.defaults),
         selectedId: stillThere ? state.selectedId : null,
@@ -265,7 +295,15 @@ export const layoutStore = {
     return state.defaults;
   },
   setDefault(partial: Partial<OverlayDefaults>) {
-    state = { ...state, defaults: { ...state.defaults, ...partial } };
+    const defaults = { ...state.defaults, ...partial };
+    state = { ...state, defaults };
+    // Raising the global scale enlarges em-based content, so widgets inheriting
+    // it must grow to stay un-squished. Re-clamp the active profile's inheritors.
+    if (partial.scale != null) {
+      const layout = current();
+      const widgets = layout.widgets.map((w) => (w.useGeneralScale ? clampSize(w, defaults) : w));
+      state = { ...state, profiles: { ...state.profiles, [state.active]: { ...layout, widgets } } };
+    }
     emit();
     schedulePersist();
   },
@@ -288,7 +326,7 @@ export const layoutStore = {
           const active = blob.profiles[blob.active] ? blob.active : Object.keys(blob.profiles)[0];
           state = {
             active,
-            profiles: normalizeProfiles(blob.profiles),
+            profiles: normalizeProfiles(blob.profiles, normalizeDefaults(blob.defaults)),
             carProfiles: blob.carProfiles ?? {},
             defaults: normalizeDefaults(blob.defaults),
             selectedId: null,
@@ -338,7 +376,7 @@ export const layoutStore = {
     const layout = current();
     replaceCurrent({
       ...layout,
-      widgets: layout.widgets.map((w) => (w.instanceId === id ? { ...w, ...partial } : w)),
+      widgets: layout.widgets.map((w) => (w.instanceId === id ? clampSize({ ...w, ...partial }, state.defaults) : w)),
     });
   },
 
@@ -346,10 +384,17 @@ export const layoutStore = {
     const layout = current();
     replaceCurrent({
       ...layout,
+      // Re-clamp: toggling a column changes the content-aware minimum width, so a
+      // box that fit the trimmed set must grow when columns are turned back on.
       widgets: layout.widgets.map((w) =>
-        w.instanceId === id ? { ...w, config: { ...w.config, ...partial } } : w
+        w.instanceId === id ? clampSize({ ...w, config: { ...w.config, ...partial } }, state.defaults) : w
       ),
     });
+  },
+
+  /** Smallest box (real px) this widget can occupy without squishing — see `minSizePx`. */
+  minSizeFor(inst: WidgetInstance): { w: number; h: number } {
+    return minSizePx(inst, state.defaults);
   },
 
   resetConfig(id: string) {
