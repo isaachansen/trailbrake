@@ -26,6 +26,23 @@ export function accentRgba(hex: string, alpha: number): string {
 }
 
 /**
+ * Darken a hex by scaling each channel toward black (factor < 1). Used for the
+ * `--accent-dark` hover tint so primary buttons darken in the *chosen* accent
+ * rather than a fixed pink. Falls back to a darkened default pink on bad input.
+ */
+export function accentDarken(hex: string, factor = 0.82): string {
+  const h = (hex || "").replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const n = parseInt(full, 16);
+  if (full.length !== 6 || Number.isNaN(n)) return "#d12574";
+  const scale = (c: number) => Math.max(0, Math.min(255, Math.round(c * factor)));
+  const r = scale((n >> 16) & 255);
+  const g = scale((n >> 8) & 255);
+  const b = scale(n & 255);
+  return "#" + [r, g, b].map((c) => c.toString(16).padStart(2, "0")).join("");
+}
+
+/**
  * The `--accent*` custom properties for a chosen accent, applied inline on the
  * `.mgr` root so they override the stylesheet defaults with no load flash. The
  * alphas mirror the original values in `manager.css`.
@@ -33,6 +50,7 @@ export function accentRgba(hex: string, alpha: number): string {
 export function accentVars(hex: string): CSSProperties {
   return {
     "--accent": hex,
+    "--accent-dark": accentDarken(hex),
     "--accent-soft": accentRgba(hex, 0.14),
     "--accent-line": accentRgba(hex, 0.42),
     "--accent-glow": accentRgba(hex, 0.16),

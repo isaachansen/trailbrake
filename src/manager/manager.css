@@ -25,6 +25,9 @@
   --faint: #5f6573;
   /* accent + status */
   --accent: #ff2d8e;
+  /* Slightly darker accent for primary-button hover; recomputed per chosen
+     accent in accent.ts (accentVars). */
+  --accent-dark: #d12574;
   --accent-soft: rgba(255, 45, 142, 0.14);
   --accent-line: rgba(255, 45, 142, 0.42);
   --accent-glow: rgba(255, 45, 142, 0.16);
@@ -238,7 +241,7 @@
   box-shadow: 0 8px 22px var(--accent-glow);
 }
 .btn-primary:hover {
-  background: #ff44a0;
+  background: var(--accent-dark);
   color: #fff;
   border-color: transparent;
 }
