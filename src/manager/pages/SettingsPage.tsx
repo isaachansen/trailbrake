@@ -10,6 +10,7 @@ import { layoutStore, useLayout } from "../../store/layout";
 import { SESSION_STATES } from "../../store/sessionState";
 import { Field, Slider, Toggle } from "../ui";
 import { ACCENT_PRESETS } from "../accent";
+import { ColorWheel } from "../ColorWheel";
 import { SoftwareUpdates } from "./SoftwareUpdates";
 import { BuyMeACoffee } from "../BuyMeACoffee";
 
@@ -46,6 +47,7 @@ export function SettingsPage() {
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
   const [capturing, setCapturing] = useState(false);
   const [hotkeyWarn, setHotkeyWarn] = useState(false);
+  const [wheelOpen, setWheelOpen] = useState(false);
 
   useEffect(() => {
     void controls.listMonitors().then(setMonitors);
@@ -160,23 +162,38 @@ export function SettingsPage() {
                 onClick={() => settingsStore.setAccentColor(p.hex)}
               />
             ))}
-            <label
-              title="Custom color"
-              className={`accent-swatch accent-custom${
-                ACCENT_PRESETS.some((p) => p.hex.toLowerCase() === settings.accentColor.toLowerCase()) ? "" : " on"
-              }`}
-              style={
-                ACCENT_PRESETS.some((p) => p.hex.toLowerCase() === settings.accentColor.toLowerCase())
-                  ? undefined
-                  : { background: settings.accentColor }
-              }
-            >
-              <input
-                type="color"
+            {(() => {
+              const isCustom = !ACCENT_PRESETS.some((p) => p.hex.toLowerCase() === settings.accentColor.toLowerCase());
+              return (
+                <button
+                  type="button"
+                  title="Custom color"
+                  aria-label="Custom color"
+                  className={`accent-swatch accent-custom${isCustom ? " on" : ""}${wheelOpen ? " open" : ""}`}
+                  style={
+                    isCustom
+                      ? {
+                          // Custom color chosen: solid swatch of that color with a
+                          // matching colored rim. (No custom → rainbow pinwheel below.)
+                          background: settings.accentColor,
+                          borderColor: "transparent",
+                          boxShadow: `0 0 0 2px rgba(0, 0, 0, 0.45), 0 0 0 4px ${settings.accentColor}`,
+                        }
+                      : undefined
+                  }
+                  onClick={() => setWheelOpen((v) => !v)}
+                >
+                  {!isCustom && <span className="accent-custom-dot" />}
+                </button>
+              );
+            })()}
+            {wheelOpen && (
+              <ColorWheel
                 value={settings.accentColor}
-                onChange={(e) => settingsStore.setAccentColor(e.target.value)}
+                onChange={(hex) => settingsStore.setAccentColor(hex)}
+                onClose={() => setWheelOpen(false)}
               />
-            </label>
+            )}
           </div>
         </Field>
         <Field label="Overlay monitor">
