@@ -25,25 +25,36 @@ export function LiquidGlassFilter() {
   return (
     <svg width="0" height="0" aria-hidden style={{ position: "absolute", pointerEvents: "none" }}>
       <filter id={GLASS_FILTER_ID} x="-20%" y="-20%" width="140%" height="140%" colorInterpolationFilters="sRGB">
-        <feTurbulence type="fractalNoise" baseFrequency="0.009 0.013" numOctaves={2} seed={11} result="noise" />
-        <feGaussianBlur in="noise" stdDeviation={1.4} result="noiseBlur" />
-        <feDisplacementMap in="SourceGraphic" in2="noiseBlur" scale={18} xChannelSelector="R" yChannelSelector="G" />
+        <feTurbulence type="fractalNoise" baseFrequency="0.008 0.011" numOctaves={2} seed={11} result="noise" />
+        <feGaussianBlur in="noise" stdDeviation={1.6} result="noiseBlur" />
+        <feDisplacementMap in="SourceGraphic" in2="noiseBlur" scale={11} xChannelSelector="R" yChannelSelector="G" />
       </filter>
     </svg>
   );
 }
 
-/** Liquid-glass panel surface. `alpha` (0..1) scales the tint so the per-widget
- *  opacity control still dims the panel. */
+/** Liquid-glass panel surface. `alpha` (0..1) scales the fill so the per-widget
+ *  opacity control still dims the panel.
+ *
+ *  Legibility over busy/bright sim backgrounds comes from two things: a **dark
+ *  translucent base** under the glass (so content always has contrast) and a
+ *  **strong frosted blur** (so the scene behind reads as a soft wash, not detail
+ *  competing with the text). The white sheen + rim sit on top for the glass look. */
 export function glassChrome(alpha = 1): CSSProperties {
   const a = Math.max(0, Math.min(1, alpha));
   return {
-    background: `linear-gradient(135deg, rgba(255,255,255,${0.12 * a}), rgba(255,255,255,${0.03 * a}) 42%, rgba(255,255,255,${0.07 * a}))`,
+    background:
+      // top-light sheen (glass)…
+      `linear-gradient(180deg, rgba(255,255,255,${0.1 * a}), rgba(255,255,255,0) 40%), ` +
+      `linear-gradient(160deg, rgba(255,255,255,${0.05 * a}), rgba(255,255,255,${0.015 * a})), ` +
+      // …over a dark base for readability.
+      `rgba(13,15,21,${0.62 * a})`,
     border: GLASS_BORDER,
     borderRadius: GLASS_RADIUS,
     boxShadow: GLASS_SHADOW,
-    backdropFilter: `blur(2px) saturate(185%) brightness(1.06) url(#${GLASS_FILTER_ID})`,
-    WebkitBackdropFilter: `blur(2px) saturate(185%) brightness(1.06) url(#${GLASS_FILTER_ID})`,
+    // Heavier blur + no brightness boost so bright scenes don't wash out the text.
+    backdropFilter: `blur(10px) saturate(150%) url(#${GLASS_FILTER_ID})`,
+    WebkitBackdropFilter: `blur(10px) saturate(150%) url(#${GLASS_FILTER_ID})`,
   };
 }
 
@@ -59,7 +70,7 @@ export function GlassSpecular({ radius = GLASS_RADIUS }: { radius?: number }) {
         pointerEvents: "none",
         zIndex: 0,
         background:
-          "radial-gradient(130% 80% at 22% -12%, rgba(255,255,255,0.3), rgba(255,255,255,0.06) 34%, transparent 58%)",
+          "radial-gradient(120% 75% at 24% -14%, rgba(255,255,255,0.22), rgba(255,255,255,0.04) 32%, transparent 54%)",
       }}
     />
   );
