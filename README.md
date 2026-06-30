@@ -13,7 +13,7 @@ track map and more — composited right over your game, in real time.
 [![Latest release](https://img.shields.io/github/v/release/isaachansen/trailbrake?style=flat-square&color=ff2d8e&label=download)](https://github.com/isaachansen/trailbrake/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/isaachansen/trailbrake/total?style=flat-square&color=2fe08a)](https://github.com/isaachansen/trailbrake/releases)
 
-### [⬇&nbsp; Download for Windows](https://github.com/isaachansen/trailbrake/releases/latest) &nbsp;·&nbsp; [Features](#features) &nbsp;·&nbsp; [Widgets](#widgets) &nbsp;·&nbsp; [FAQ](#faq)
+### [⬇&nbsp; Download for Windows](https://github.com/isaachansen/trailbrake/releases/latest) &nbsp;·&nbsp; [🖱️&nbsp; Try the live demo](https://trailbrake-demo.pages.dev) &nbsp;·&nbsp; [Features](#features) &nbsp;·&nbsp; [Widgets](#widgets) &nbsp;·&nbsp; [FAQ](#faq)
 
 <a href="https://www.buymeacoffee.com/trailbrake"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=trailbrake&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" alt="Buy me a coffee" height="42" /></a>
 
@@ -36,6 +36,13 @@ track and hides when the session ends.
 It's built to be **invisible to your frame rate**. The overlay is its own window,
 and the high-rate inputs (pedals, rpm, steering at ~60 Hz) are drawn outside
 React so heavy panels never re-render in the hot path.
+
+## Try it first
+
+**[Open the live demo →](https://trailbrake-demo.pages.dev)** Runs the widget
+manager and overlay right in your browser with realistic mock telemetry — no
+install required. Toggle widgets, hit *Preview* to see the full overlay, and
+drag widgets around in edit mode to get a feel for the HUD before downloading.
 
 ## Download
 
