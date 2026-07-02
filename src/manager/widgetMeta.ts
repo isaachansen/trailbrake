@@ -18,7 +18,7 @@ const META: Record<string, WidgetMeta> = {
   },
   tachometer: {
     monogram: "TAC",
-    description: "Big analog rev counter with redline and shift-point markers.",
+    description: "Gear and RPM bar with shift-point and redline markers.",
   },
   "delta-bar": {
     monogram: "Δ",

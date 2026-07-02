@@ -45,12 +45,15 @@ const BACKDROPS: Record<BgKey, string> = {
     "repeating-conic-gradient(#3a3f47 0% 25%, #2a2e35 0% 50%) 50% / 40px 40px",
 };
 
+// Always returns a fresh object — never a reference into the registry's
+// `defaultSize`/`minSize` singletons, which callers below adjust in place
+// (e.g. for `contentHeight`) and must not corrupt for every other consumer.
 function sizeFor(def: WidgetDefinition, mode: string, w?: number, h?: number) {
   if (w && h) return { w, h };
-  if (mode === "min") return def.minSize;
+  if (mode === "min") return { ...def.minSize };
   if (mode === "large")
     return { w: Math.round(def.defaultSize.w * 1.5), h: Math.round(def.defaultSize.h * 1.5) };
-  return def.defaultSize;
+  return { ...def.defaultSize };
 }
 
 function Inner({ def, config }: { def: WidgetDefinition; config: Record<string, unknown> }) {
@@ -84,6 +87,9 @@ function GalleryPanel({
   // edge glow) to portal into — mirrors WidgetPreview / the real overlay host.
   const [layer, setLayer] = useState<HTMLDivElement | null>(null);
   const useGlass = glass && !transparent;
+  // Opacity mirrors the real host (WidgetHost.tsx): panel-*background* alpha,
+  // never CSS element opacity — text/numbers stay crisp at any setting.
+  const panelAlpha = Math.max(0, Math.min(1, opacity));
 
   return (
     <div data-widget-shot style={{ width: w, height: h, position: "relative" }}>
@@ -100,13 +106,12 @@ function GalleryPanel({
           color: theme.colors.text,
           fontSize: theme.font.sizeBase * widgetScale,
           fontFamily: theme.font.family,
-          opacity,
           ...(transparent
             ? {}
             : useGlass
-              ? glassChrome()
+              ? glassChrome(panelAlpha)
               : {
-                  background: theme.colors.surface,
+                  background: `rgba(18, 20, 27, ${panelAlpha})`,
                   border: `1px solid ${theme.colors.surfaceBorder}`,
                   borderRadius: theme.radius,
                   boxShadow: theme.panelShadow,
@@ -345,7 +350,11 @@ export default function WidgetGallery() {
                 size={sizeFor(def, sizeMode, w, h)}
                 opacity={opacity}
                 widgetScale={widgetScale}
-                config={configOverride}
+                // Merge over each widget's own defaults (matches the documented
+                // `config=` behavior in single-widget mode) rather than replacing
+                // them outright, which would blank every other field for every
+                // widget in the sheet.
+                config={configOverride ? { ...(def.defaultConfig as object), ...configOverride } : undefined}
               />
             ))}
           </div>

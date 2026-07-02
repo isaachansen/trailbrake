@@ -88,7 +88,8 @@ export const controls = {
     return (await cmd<MonitorInfo[]>("list_monitors")) ?? [];
   },
 
-  async setOverlayMonitor(index: number): Promise<void> {
+  /** `null` = auto (the backend picks the secondary monitor). */
+  async setOverlayMonitor(index: number | null): Promise<void> {
     await cmd("set_overlay_monitor", { index });
   },
 

@@ -101,19 +101,21 @@ function CornerName({ theme, config }: BaseWidgetProps<CornerNameConfig>) {
       let progress = 0;
 
       if (turns && turns.length > 0 && pct != null) {
-        // Find the last corner whose marker the driver has passed (current corner).
-        // We walk the sorted list and find the largest marker <= pct, with wrap-around
-        // so that a driver past the last corner (near lap end) wraps to the final corner.
+        // Find the last corner whose marker the driver has passed (the corner
+        // behind them right now). We walk the sorted list and find the largest
+        // marker <= pct, with wrap-around so a driver past the last corner
+        // (near lap end) wraps to the final corner.
         let currentIdx = turns.length - 1; // default: last corner (lap wrap case)
         for (let i = 0; i < turns.length; i++) {
           if (turns[i].marker > pct) {
-            // First corner ahead — the one before it is the current corner.
+            // First corner ahead — the one before it is the last-passed corner.
             currentIdx = i === 0 ? turns.length - 1 : i - 1;
             break;
           }
           // If we exhaust the loop pct >= all markers → currentIdx stays at last corner.
         }
 
+        // The widget shows the corner being APPROACHED, not the one just left.
         const nextIdx = (currentIdx + 1) % turns.length;
         const currentMarker = turns[currentIdx].marker;
         const nextMarker = turns[nextIdx].marker;
@@ -122,17 +124,19 @@ function CornerName({ theme, config }: BaseWidgetProps<CornerNameConfig>) {
         let segLen = nextMarker - currentMarker;
         if (segLen <= 0) segLen += 1;
 
-        // How far into the current segment the driver is (circular).
+        // How far into the segment toward the upcoming corner the driver is
+        // (circular) — this doubles as the approach progress toward `nextIdx`.
         let into = pct - currentMarker;
         if (into < 0) into += 1;
 
         progress = Math.max(0, Math.min(1, into / segLen));
 
         // Numeric names ("1", "6a") get a "T" prefix; named corners are verbatim.
-        const raw = turns[currentIdx].name.trim();
+        const raw = turns[nextIdx].name.trim();
         label = /^\d+[a-z]?$/i.test(raw) ? `T${raw}` : raw;
-        // Sub-label: 1-based ordinal of the current corner in the sorted list.
-        sub = `CORNER ${currentIdx + 1}`;
+        // Eyebrow is additive ("NEXT"), not a repeat of the corner number the
+        // main label already shows.
+        sub = "NEXT";
       }
 
       if (labelRef.current) labelRef.current.textContent = label;

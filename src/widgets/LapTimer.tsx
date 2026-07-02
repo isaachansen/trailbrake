@@ -10,13 +10,11 @@ const validDelta = (d: number | null): number | null =>
 
 export interface LapTimerConfig {
   showPredicted: boolean;
-  showHistory: boolean;
   showDelta: boolean;
 }
 
 const defaultConfig: LapTimerConfig = {
   showPredicted: true,
-  showHistory: false,
   showDelta: true,
 };
 
@@ -45,7 +43,9 @@ function LapTimer({ theme, config }: BaseWidgetProps<LapTimerConfig>) {
       const cur = fast?.currentLapS ?? slow?.currentLapS ?? null;
       setText(curRef.current, fmtLapTime(cur));
 
-      const deltaBest = slow?.deltaBestS ?? null;
+      const best = slow?.bestLapS ?? null;
+      // A delta with no best lap to be relative to is meaningless — treat as absent.
+      const deltaBest = best != null ? slow?.deltaBestS ?? null : null;
       const deltaSess = slow?.deltaSessionBestS ?? null;
       // Guard against out-lap / invalid-lap spikes before using for display or math.
       const deltaBestValid = validDelta(deltaBest);
@@ -55,10 +55,11 @@ function LapTimer({ theme, config }: BaseWidgetProps<LapTimerConfig>) {
       else if (deltaBestValid != null && deltaBestValid < 0) curColor = t.gain;
       setColor(curRef.current, curColor);
 
-      const predicted = cur != null && deltaBestValid != null ? cur + deltaBestValid : null;
+      // Predicted lap = best lap adjusted by the live delta to best.
+      const predicted = best != null && deltaBestValid != null ? best + deltaBestValid : null;
       setText(predRef.current, fmtLapTime(predicted));
 
-      setText(bestRef.current, fmtLapTime(slow?.bestLapS ?? null));
+      setText(bestRef.current, fmtLapTime(best));
       setText(lastRef.current, fmtLapTime(slow?.lastLapS ?? null));
 
       setText(deltaRef.current, deltaBestValid != null ? fmtDelta(deltaBestValid) : "--");
@@ -120,7 +121,6 @@ export const lapTimerDef: WidgetDefinition<LapTimerConfig> = {
   configSchema: [
     { key: "showPredicted", label: "Predicted lap", type: "boolean" },
     { key: "showDelta", label: "Delta", type: "boolean" },
-    { key: "showHistory", label: "Lap history", type: "boolean" },
   ],
   Component: LapTimer,
 };

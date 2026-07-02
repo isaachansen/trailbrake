@@ -42,6 +42,10 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
   if (!isTauri()) return null;
   const { check } = await import("@tauri-apps/plugin-updater");
   const update = await check();
+  // A previous check's Update handle (a Tauri Resource, backed by a Rust-side
+  // allocation) is being discarded — release it before replacing `pending`
+  // instead of leaking one per check.
+  if (pending) await pending.close().catch(() => {});
   pending = update;
   if (!update) return null;
   return {

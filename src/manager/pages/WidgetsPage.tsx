@@ -3,7 +3,7 @@
 // toggle adds/removes it from the active profile). Clicking a card opens a
 // preview modal with the config controls beside it, updating in real time.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { layoutStore, useLayout, type Layout, type WidgetInstance } from "../../store/layout";
 import { allWidgetDefs, getWidgetDef } from "../../widgets/registry";
 import { useCaps } from "../../store/hooks";
@@ -52,9 +52,47 @@ export function WidgetsPage() {
   const defs = allWidgetDefs();
   const current = layout.profiles[layout.active];
   const [modalId, setModalId] = useState<string | null>(null);
+  const modalRef = useRef<HTMLDivElement | null>(null);
 
   // Keep mock telemetry flowing into the preview store while this page is open.
   useEffect(() => startPreviewMock(), []);
+
+  // Config modal: Escape-to-close, autofocus the first control on open, and a
+  // basic Tab focus trap so keyboard users can't tab out into the page behind it.
+  useEffect(() => {
+    if (!modalId) return;
+    const getFocusable = () =>
+      Array.from(
+        modalRef.current?.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      ).filter((el) => !el.hasAttribute("disabled"));
+    // Defer to let the modal's contents mount before focusing.
+    const t = window.setTimeout(() => getFocusable()[0]?.focus(), 0);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setModalId(null);
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = getFocusable();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      window.clearTimeout(t);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [modalId]);
 
   // One widget per type: toggling adds one instance or removes any of that type.
   const enable = (type: string) => layoutStore.addWidget(type);
@@ -107,7 +145,7 @@ export function WidgetsPage() {
 
       {modalDef && modalMeta && (
         <div className="modal-backdrop" onClick={() => setModalId(null)}>
-          <div className="preview-modal wide" onClick={(e) => e.stopPropagation()}>
+          <div className="preview-modal wide" ref={modalRef} role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <header className="preview-modal-head">
               <div className="row" style={{ gap: 12 }}>
                 <div className="mono-badge">{modalMeta.monogram}</div>
@@ -143,7 +181,12 @@ export function WidgetsPage() {
             </div>
 
             <footer className="preview-modal-foot">
-              {capChips(modalDef.requiredCapabilities, caps) ?? <span className="hint">Supported by the current source.</span>}
+              {capChips(modalDef.requiredCapabilities, caps) ??
+                (caps ? (
+                  <span className="hint">Supported by the current source.</span>
+                ) : (
+                  <span className="hint">No sim connected — capabilities unknown.</span>
+                ))}
               <div className="row" style={{ gap: 8 }}>
                 {modalInst ? (
                   <button className="btn btn-danger" onClick={() => disable(modalDef.id)}>Remove</button>

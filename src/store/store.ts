@@ -100,6 +100,21 @@ export class TelemetryStore {
     this.slowListeners.forEach((l) => l());
   }
 
+  /**
+   * Drop everything — latest samples, capabilities, and the history ring — so
+   * widgets fall back to their honest empty states instead of rendering the
+   * last (possibly mock) frame forever. Called when the idle-preview mock
+   * stops and when a session ends with nothing else feeding the store.
+   */
+  clear() {
+    this.latestFast = null;
+    this.history = [];
+    this.pushTimes = [];
+    this.slow = null;
+    this.caps = null;
+    this.slowListeners.forEach((l) => l());
+  }
+
   setCaps(caps: Capabilities) {
     this.caps = caps;
     this.slowListeners.forEach((l) => l());

@@ -42,7 +42,14 @@ export function WidgetPreview({ def, maxW, maxH, config, opacity = 1, widgetScal
   // mode) — match the overlay and drop the glass chrome so the preview shows just
   // the effect, not an empty box.
   const transparent = def.transparentPanel?.(cfg) ?? false;
-  const glass = !transparent && useSettings().panelStyle === "liquid";
+  // Call unconditionally — hooks must never be skipped by a short-circuit branch
+  // (a transparent-panel widget still needs this hook to run every render).
+  const panelStyle = useSettings().panelStyle;
+  const glass = !transparent && panelStyle === "liquid";
+  // Opacity mirrors the real host (WidgetHost.tsx): it's panel-*background* alpha,
+  // never CSS element opacity — text and numbers must stay fully crisp at any
+  // setting, matching what the user actually sees once placed.
+  const panelAlpha = Math.max(0, Math.min(1, opacity));
 
   // Layer for screen-effect widgets (Spotter edge glow) to portal into. It must
   // represent the *screen*, not the widget's own (overflow-clipped) panel — so it
@@ -63,13 +70,12 @@ export function WidgetPreview({ def, maxW, maxH, config, opacity = 1, widgetScal
           transform: `scale(${fit})`,
           transformOrigin: "top left",
           fontSize: theme.font.sizeBase * widgetScale,
-          opacity,
           ...(transparent
             ? {}
             : glass
-              ? glassChrome()
+              ? glassChrome(panelAlpha)
               : {
-                  background: theme.colors.surface,
+                  background: `rgba(18, 20, 27, ${panelAlpha})`,
                   border: `1px solid ${theme.colors.surfaceBorder}`,
                   borderRadius: theme.radius,
                   boxShadow: theme.panelShadow,

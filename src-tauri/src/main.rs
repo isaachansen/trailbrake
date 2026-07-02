@@ -7,8 +7,8 @@
 //   - "overlay": the transparent, borderless, always-on-top, click-through
 //     surface the widgets composite onto the game. Hidden until it's needed.
 //
-// Overlay visibility is reconciled from three inputs (see `reconcile_overlay`):
-//   visible   = editing || preview || (auto_show && session_active)
+// Overlay visibility is reconciled from four inputs (see `reconcile_overlay`):
+//   visible   = editing || preview || (auto_show && session_active) || vr_active
 //   interactive (cursor captured) = editing
 // A session watchdog on the telemetry bridge flips `session_active` when frames
 // start/stop flowing, so the overlay auto-shows in a session and hides when it
@@ -75,6 +75,22 @@ struct OverlayState {
     /// tray) or by the startup grace timer (no session → show the manager). Ensures
     /// a mid-race restart never pops the control window over the game.
     launch_manager_resolved: AtomicBool,
+    /// Serializes `reconcile_overlay`'s read→apply so concurrent callers (bridge
+    /// watchdog, hotkey, manager commands) can't interleave a stale show/hide
+    /// over a fresh one.
+    reconcile: Mutex<()>,
+}
+
+impl OverlayState {
+    /// The single source of truth for overlay visibility — must match what
+    /// `reconcile_overlay` applies to the native window.
+    fn overlay_visible(&self) -> bool {
+        self.edit.load(Ordering::SeqCst)
+            || self.preview.load(Ordering::SeqCst)
+            || (self.auto_show.load(Ordering::SeqCst) && self.session_active.load(Ordering::SeqCst))
+            // VR keeps the overlay window rendered (off in the headset, but capturable).
+            || self.vr_active.load(Ordering::SeqCst)
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -494,13 +510,11 @@ fn show_manager(app: &AppHandle) {
 /// it to the native window, then notify the webviews.
 fn reconcile_overlay(app: &AppHandle) {
     let st = app.state::<OverlayState>();
+    // Hold the reconcile lock across read+apply so two callers can't interleave
+    // (e.g. the watchdog's hide landing after — and undoing — a hotkey's show).
+    let _guard = st.reconcile.lock().unwrap_or_else(|p| p.into_inner());
     let editing = st.edit.load(Ordering::SeqCst);
-    let preview = st.preview.load(Ordering::SeqCst);
-    let auto = st.auto_show.load(Ordering::SeqCst);
-    let session = st.session_active.load(Ordering::SeqCst);
-    // VR keeps the overlay window rendered (off in the headset, but capturable).
-    let vr = st.vr_active.load(Ordering::SeqCst);
-    let visible = editing || preview || (auto && session) || vr;
+    let visible = st.overlay_visible();
 
     if let Some(win) = app.get_webview_window("overlay") {
         if visible {
@@ -528,19 +542,14 @@ pub(crate) fn set_vr_active(app: &AppHandle, active: bool) {
 /// Push the current status to the manager (status line / button states).
 fn emit_status(app: &AppHandle) {
     let st = app.state::<OverlayState>();
-    let editing = st.edit.load(Ordering::SeqCst);
-    let preview = st.preview.load(Ordering::SeqCst);
-    let auto = st.auto_show.load(Ordering::SeqCst);
-    let session = st.session_active.load(Ordering::SeqCst);
-    let visible = editing || preview || (auto && session);
     let source = st.source.lock().map(|s| s.clone()).unwrap_or_default();
     let _ = app.emit(
         EVT_STATUS,
         StatusMsg {
-            session_active: session,
-            editing,
-            preview,
-            overlay_visible: visible,
+            session_active: st.session_active.load(Ordering::SeqCst),
+            editing: st.edit.load(Ordering::SeqCst),
+            preview: st.preview.load(Ordering::SeqCst),
+            overlay_visible: st.overlay_visible(),
             source,
         },
     );
@@ -583,19 +592,29 @@ fn register_edit_hotkey(app: &AppHandle, accel: &str) -> Result<(), String> {
 
     let st = app.state::<OverlayState>();
 
-    // Drop the previously-registered combo, if any (clone out of the guard so we
-    // don't hold the lock across the unregister call).
+    // Clone the current combo out of the guard so we don't hold the lock across
+    // the (un)register calls.
     let old = st.edit_hotkey.lock().ok().map(|g| g.clone());
-    if let Some(old) = old {
-        let _ = gs.unregister(old);
+
+    // Re-applying the combo that's already live is a no-op (registering it a
+    // second time would fail as "already registered").
+    if old.as_ref() == Some(&new) && gs.is_registered(new.clone()) {
+        return Ok(());
     }
 
+    // Register the NEW shortcut first; only drop the old one after success. If
+    // the new combo is rejected (taken by another app, etc.) the old hotkey
+    // stays registered and our state is untouched.
     gs.on_shortcut(new.clone(), |app, _shortcut, event| {
         if event.state() == ShortcutState::Pressed {
             toggle_edit(app);
         }
     })
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| format!("could not register hotkey \"{accel}\": {e}"))?;
+
+    if let Some(old) = old.filter(|o| *o != new) {
+        let _ = gs.unregister(old);
+    }
 
     if let Ok(mut cur) = st.edit_hotkey.lock() {
         *cur = new;
@@ -637,15 +656,11 @@ fn set_edit_hotkey(app: AppHandle, accel: String) -> Result<(), String> {
 #[tauri::command]
 fn get_status(app: AppHandle) -> StatusMsg {
     let st = app.state::<OverlayState>();
-    let editing = st.edit.load(Ordering::SeqCst);
-    let preview = st.preview.load(Ordering::SeqCst);
-    let auto = st.auto_show.load(Ordering::SeqCst);
-    let session = st.session_active.load(Ordering::SeqCst);
     StatusMsg {
-        session_active: session,
-        editing,
-        preview,
-        overlay_visible: editing || preview || (auto && session),
+        session_active: st.session_active.load(Ordering::SeqCst),
+        editing: st.edit.load(Ordering::SeqCst),
+        preview: st.preview.load(Ordering::SeqCst),
+        overlay_visible: st.overlay_visible(),
         source: st.source.lock().map(|s| s.clone()).unwrap_or_default(),
     }
 }
@@ -678,11 +693,18 @@ fn list_monitors(app: AppHandle) -> Vec<MonitorInfo> {
         .collect()
 }
 
+/// Move the overlay to a specific monitor, or back to automatic selection
+/// (`None` / JS `null` — prefer a secondary monitor, see
+/// `place_on_secondary_monitor`).
 #[tauri::command]
-fn set_overlay_monitor(app: AppHandle, index: usize) -> Result<(), String> {
+fn set_overlay_monitor(app: AppHandle, index: Option<usize>) -> Result<(), String> {
     let win = app
         .get_webview_window("overlay")
         .ok_or("no overlay window")?;
+    let Some(index) = index else {
+        place_on_secondary_monitor(&win);
+        return Ok(());
+    };
     let monitors = win.available_monitors().map_err(|e| e.to_string())?;
     let m = monitors.get(index).ok_or("monitor index out of range")?;
     win.set_position(*m.position()).map_err(|e| e.to_string())?;
@@ -771,8 +793,14 @@ fn spawn_bridge(app: AppHandle) {
             let mut frames = 0u32;
             let mut last_rate = Instant::now();
             let mut reader_hz = 0.0f32;
-            let mut last_slow = Instant::now() - Duration::from_secs(1);
-            let mut last_frame = Instant::now() - SESSION_TIMEOUT * 2;
+            // Backdate so the first frame emits slow data / the watchdog can fire
+            // immediately. `Instant` subtraction panics if it would precede the
+            // clock's epoch (possible within seconds of Windows boot), so fall
+            // back to "now" — worst case the first slow emit / timeout is
+            // delayed by that same backdate.
+            let now = Instant::now();
+            let mut last_slow = now.checked_sub(Duration::from_secs(1)).unwrap_or(now);
+            let mut last_frame = now.checked_sub(SESSION_TIMEOUT * 2).unwrap_or(now);
 
             loop {
                 match rx.recv_timeout(Duration::from_millis(400)) {
@@ -870,6 +898,9 @@ fn main() {
         // used after an update installs. Both are driven from the frontend.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // Opens external links (Buy Me a Coffee) in the system browser instead
+        // of navigating the webview.
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             load_overlay_config,
             save_overlay_config,
@@ -901,6 +932,7 @@ fn main() {
                     .expect("default hotkey must parse"),
             ),
             launch_manager_resolved: AtomicBool::new(false),
+            reconcile: Mutex::new(()),
         })
         .manage(vr::VrState::default())
         .setup(|app| {

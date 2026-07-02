@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
 import { useSettings } from "../store/appSettings";
-import { useSlow } from "../store/hooks";
+import { useCarName } from "./useCarName";
 import { speedValue, speedLabel } from "./format";
 import { resolveCarLeds, gearLeds } from "./carLeds";
 import { GEAR_COLOR_PRESETS } from "./raceColors";
@@ -45,7 +45,7 @@ const LED_COUNT = 16;
 /** Window (s) shown by the mini input trace. */
 const INPUT_WINDOW = 5;
 
-function DashCluster({ theme, config, caps }: BaseWidgetProps<DashClusterConfig>) {
+function DashCluster({ theme, config, caps, size }: BaseWidgetProps<DashClusterConfig>) {
   const store = useStoreInstance();
   const t = theme.colors;
   const mono = theme.font.mono;
@@ -58,7 +58,9 @@ function DashCluster({ theme, config, caps }: BaseWidgetProps<DashClusterConfig>
   const inputCanvas = useRef<HTMLCanvasElement | null>(null);
 
   const units = useSettings().units;
-  const carName = useSlow()?.carName ?? null;
+  // Fast-path widget — subscribe narrowly to just the car name (see useCarName)
+  // instead of useSlow(), which would re-render on every slow-path tick.
+  const carName = useCarName();
   // Per-car rev-light profile (LED count / thresholds / colors), if the live car
   // is recognized and the feature is on. Re-resolved only when the car changes.
   const profile = useMemo(
@@ -69,6 +71,23 @@ function DashCluster({ theme, config, caps }: BaseWidgetProps<DashClusterConfig>
 
   const live = useRef({ config, units, profile, ledCount });
   live.current = { config, units, profile, ledCount };
+
+  // Cache the input-trace canvas's CSS size via ResizeObserver instead of
+  // calling getBoundingClientRect() every animation frame (that forces a layout
+  // read at 60fps). Re-observes when the canvas mounts/unmounts with showInputs.
+  const inputSize = useRef({ w: 0, h: 0 });
+  useEffect(() => {
+    const ic = inputCanvas.current;
+    if (!ic) return;
+    const measure = () => {
+      const r = ic.getBoundingClientRect();
+      inputSize.current = { w: r.width, h: r.height };
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(ic);
+    return () => ro.disconnect();
+  }, [config.showInputs]);
 
   useEffect(() => {
     let raf = 0;
@@ -94,8 +113,11 @@ function DashCluster({ theme, config, caps }: BaseWidgetProps<DashClusterConfig>
           for (let i = 0; i < ledCount; i++) {
             const el = ledRefs.current[i];
             if (!el) continue;
-            const on = g ? rpm >= g.leds[i] : false;
+            // Physical gap segments ("#000000" in the community data) are
+            // stripped from the profile at load time (see carLeds.ts), so
+            // every LED here is real and participates in sweep + flash.
             const col = profile.colors[i] ?? t.accent;
+            const on = g ? rpm >= g.leds[i] : false;
             if (flash) {
               el.style.background = "#cfe8ff";
               el.style.boxShadow = "0 0 9px #cfe8ff";
@@ -131,21 +153,22 @@ function DashCluster({ theme, config, caps }: BaseWidgetProps<DashClusterConfig>
         }
       }
 
-      // Mini throttle/brake trace (only mounted when enabled).
+      // Mini throttle/brake trace (only mounted when enabled). Size comes from
+      // the ResizeObserver-cached value above, not a per-frame layout read.
       const ic = inputCanvas.current;
       if (ic) {
         const ctx = ic.getContext("2d");
-        const r = ic.getBoundingClientRect();
+        const { w: rw, h: rh } = inputSize.current;
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const W = Math.max(1, Math.round(r.width * dpr));
-        const H = Math.max(1, Math.round(r.height * dpr));
+        const W = Math.max(1, Math.round(rw * dpr));
+        const H = Math.max(1, Math.round(rh * dpr));
         if (ic.width !== W || ic.height !== H) {
           ic.width = W;
           ic.height = H;
         }
         if (ctx) {
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          drawTrace(ctx, r.width, r.height, store.history, store.latestFast, t.throttle, t.brake);
+          drawTrace(ctx, rw, rh, store.history, store.latestFast, t.throttle, t.brake);
         }
       }
       raf = requestAnimationFrame(draw);
@@ -155,6 +178,16 @@ function DashCluster({ theme, config, caps }: BaseWidgetProps<DashClusterConfig>
   }, [t.throttle, t.loss, t.accent, t.brake]);
 
   const showSteering = config.showSteering && (caps?.steeringAngle ?? true);
+  // The wheel + angle label are one centered flex column whose natural height
+  // (wheel + gap + label) is fixed in em, independent of the widget's box
+  // size. At small heights that column is taller than the row it centers in,
+  // so it overflows evenly above/below — pushing the label down into (and
+  // past) the bottom padding while the gear/speed side still has slack.
+  // Shrink the wheel a bit once height gets tight so the label clears the
+  // panel edge instead of crowding it.
+  const compactWheel = size.h < 135;
+  const wheelEm = compactWheel ? "4.4em" : "5.4em";
+  const wheelLabelGap = compactWheel ? 3 : 6;
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: "12px 16px 14px", boxSizing: "border-box", overflow: "hidden" }}>
@@ -197,14 +230,14 @@ function DashCluster({ theme, config, caps }: BaseWidgetProps<DashClusterConfig>
         {/* Steering wheel — vertically centered in the (stretched) row */}
         {showSteering && (
           <div style={{ flex: "0 0 auto", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-            <div style={{ flex: "0 0 auto", width: "5.4em", height: "5.4em", borderRadius: "50%", border: "3px solid rgba(255,255,255,0.22)", position: "relative", boxSizing: "border-box" }}>
+            <div style={{ flex: "0 0 auto", width: wheelEm, height: wheelEm, borderRadius: "50%", border: "3px solid rgba(255,255,255,0.22)", position: "relative", boxSizing: "border-box" }}>
               <div ref={steerWrap} style={{ position: "absolute", inset: 0 }}>
                 <div style={{ position: "absolute", top: "50%", left: 7, right: 7, height: 3, background: t.accent, transform: "translateY(-50%)", borderRadius: 2, boxShadow: `0 0 8px ${t.accent}` }} />
                 <div style={{ position: "absolute", top: "50%", left: "50%", width: 11, height: 11, background: t.accent, borderRadius: "50%", transform: "translate(-50%,-50%)" }} />
                 <div style={{ position: "absolute", top: 5, left: "50%", width: 3, height: 11, background: "rgba(255,255,255,0.5)", transform: "translateX(-50%)", borderRadius: 2 }} />
               </div>
             </div>
-            <div ref={steerVal} style={{ fontFamily: mono, fontWeight: 600, fontSize: "0.72em", color: t.textDim, marginTop: 6 }}>0°</div>
+            <div ref={steerVal} style={{ fontFamily: mono, fontWeight: 600, fontSize: "0.72em", color: t.textDim, marginTop: wheelLabelGap }}>0°</div>
           </div>
         )}
       </div>
@@ -218,7 +251,9 @@ export const dashClusterDef: WidgetDefinition<DashClusterConfig> = {
   defaultSize: { w: 470, h: 150 },
   minSize: { w: 300, h: 116 },
   defaultConfig,
-  requiredPaths: ["fast"],
+  // Reads store.latestFast/history at 60fps (fast) plus the live car's name
+  // (slow, via useCarName) to resolve its shift-light profile.
+  requiredPaths: ["fast", "slow"],
   requiredCapabilities: [],
   configSchema: [
     { key: "useCarData", label: "Use car shift-light data", type: "boolean" },

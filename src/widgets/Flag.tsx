@@ -83,6 +83,12 @@ function Flag({ theme, config }: BaseWidgetProps<FlagConfig>) {
     for (let c = 0; c < COLS; c++) {
       const checkerLit = active.checker ? (r + c) % 2 === 0 : true;
       const lit = checkerLit && !noFlag;
+      // Unlit checker squares need to actually read as "dark checker square", not
+      // a translucent chip — at low panel opacity/light backdrops the old
+      // rgba(255,255,255,0.05)@0.4 unlit cell washed out to nearly the same tone
+      // as the lit white cell, making CHECKERED indistinguishable from WHITE
+      // (audit 7). An opaque dark fill fixes that on any backdrop.
+      const isUnlitChecker = active.checker && !lit && !noFlag;
       // Glow scales with the widget's font size so the LED bloom stays
       // proportional to the cell size — a fixed-px glow bled small cells into
       // each other at min size and looked sparse at large sizes.
@@ -92,10 +98,10 @@ function Flag({ theme, config }: BaseWidgetProps<FlagConfig>) {
           key={`${r}-${c}`}
           style={{
             borderRadius: "0.16em",
-            background: lit ? litColor : noFlag ? `${active.color}33` : "rgba(255,255,255,0.05)",
+            background: lit ? litColor : noFlag ? `${active.color}33` : isUnlitChecker ? "#0a0b0e" : "rgba(255,255,255,0.05)",
             boxShadow,
             border: lit && active.border ? `1px solid ${active.border}` : "none",
-            opacity: lit ? 1 : noFlag ? 0.6 : 0.4,
+            opacity: lit ? 1 : noFlag ? 0.6 : isUnlitChecker ? 1 : 0.4,
           }}
         />
       );

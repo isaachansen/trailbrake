@@ -2,7 +2,7 @@
 // wheel — the same UI the Settings accent picker uses. Drives any hex value via
 // `onChange`. (Relies on the `.accent-*` styles + ColorWheel, so it's manager-only.)
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ColorWheel } from "./ColorWheel";
 
 export function ColorField({
@@ -15,6 +15,7 @@ export function ColorField({
   onChange: (hex: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const v = (value || "").toLowerCase();
   const isCustom = !presets.some((p) => p.hex.toLowerCase() === v);
 
@@ -32,6 +33,7 @@ export function ColorField({
         />
       ))}
       <button
+        ref={triggerRef}
         type="button"
         data-accent-trigger
         title="Custom color"
@@ -48,7 +50,14 @@ export function ColorField({
         }
         onClick={() => setOpen((o) => !o)}
       />
-      {open && <ColorWheel value={value} onChange={onChange} onClose={() => setOpen(false)} />}
+      {open && (
+        <ColorWheel
+          value={value}
+          onChange={onChange}
+          onClose={() => setOpen(false)}
+          anchorEl={triggerRef.current}
+        />
+      )}
     </div>
   );
 }

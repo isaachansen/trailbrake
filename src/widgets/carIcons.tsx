@@ -6,7 +6,9 @@
 //
 // Mapping is keyword-based against the sim's car model name (`carScreenName`).
 // iRacing model names usually carry the make ("BMW M4 GT3", "Porsche 963"), so a
-// substring match is reliable; unmatched cars fall back to an iRacing badge.
+// substring match is reliable. Unknown cars resolve to null so callers can tell
+// "no icon" apart from a match; `iracingIcon` is exported for callers that want
+// an explicit generic fallback badge.
 
 import acura from "../../assets/car_icons/acura.svg";
 import amg from "../../assets/car_icons/amg.svg";
@@ -74,15 +76,18 @@ const BRANDS: Brand[] = [
   { icon: dallara, keywords: ["dallara"] }, // P217, iR-01/iR18, F3, DW12 — chassis maker
 ];
 
-/** Resolve a car model name to a manufacturer icon URL, falling back to iRacing. */
-export function carIconFor(name: string | null | undefined): string {
-  if (!name) return iracing;
+/** Resolve a car model name to a manufacturer icon URL, or null when unknown. */
+export function carIconFor(name: string | null | undefined): string | null {
+  if (!name) return null;
   const s = name.toLowerCase();
   for (const b of BRANDS) {
     if (b.keywords.some((k) => s.includes(k))) return b.icon;
   }
-  return iracing;
+  return null;
 }
+
+/** Generic iRacing badge — the explicit fallback for cars with no brand match. */
+export const iracingIcon = iracing;
 
 // Wide, low-profile logos (wordmarks, the Chevy bowtie, the Ford oval) fit to
 // the box *width* under `contain`, so in a square box they end up short and read

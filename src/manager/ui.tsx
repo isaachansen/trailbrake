@@ -4,16 +4,30 @@ interface ToggleProps {
   on: boolean;
   onChange: (next: boolean) => void;
   title?: string;
+  /** Renders dimmed and inert (not clickable / not focusable). */
+  disabled?: boolean;
 }
 
-export function Toggle({ on, onChange, title }: ToggleProps) {
+export function Toggle({ on, onChange, title, disabled }: ToggleProps) {
   return (
     <div
-      className={`toggle${on ? " on" : ""}`}
+      className={`toggle${on ? " on" : ""}${disabled ? " disabled" : ""}`}
       role="switch"
       aria-checked={on}
+      aria-disabled={disabled || undefined}
+      tabIndex={disabled ? -1 : 0}
       title={title}
-      onClick={() => onChange(!on)}
+      onClick={disabled ? undefined : () => onChange(!on)}
+      onKeyDown={
+        disabled
+          ? undefined
+          : (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onChange(!on);
+              }
+            }
+      }
     />
   );
 }

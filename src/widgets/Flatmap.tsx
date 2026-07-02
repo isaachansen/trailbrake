@@ -11,6 +11,7 @@ import { useSlow } from "../store/hooks";
 import { classColorMap, classColorOf } from "./raceColors";
 import { WidgetTitle } from "./WidgetTitle";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
+import type { SlowSample } from "../store/types";
 
 export interface FlatmapConfig {
   classColors: boolean;
@@ -60,6 +61,12 @@ function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
 
+    // classColorMap() allocates a Map every call — cache it and only recompute
+    // when the slow sample actually changes (a handful of Hz), not every rAF
+    // frame (60Hz), since store.getSlow() returns a fresh reference each tick.
+    let lastSlow: SlowSample | null = null;
+    let cmap = new Map<number, string>();
+
     const roundRect = (x: number, y: number, w: number, h: number, r: number) => {
       ctx.beginPath();
       ctx.moveTo(x + r, y);
@@ -86,11 +93,15 @@ function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
       const lineY = Math.round(h * 0.5) + 0.5;
       const span = Math.max(1, w - 2 * inset);
       const X = (f: number) => inset + (((f % 1) + 1) % 1) * span;
-      const tickH = Math.min(11, h * 0.12);
-      const postH = Math.min(15, h * 0.17);
+      // Scale with the widget's actual height (was capped at 11/15px, which
+      // left most of the default 130px-tall canvas as dead space) so posts and
+      // ticks stay proportionate at any size.
+      const tickH = Math.max(8, Math.min(h * 0.28, 34));
+      const postH = Math.max(11, Math.min(h * 0.38, 42));
 
-      // Lap line (spans the full marker range, post to post).
-      ctx.strokeStyle = "rgba(255,255,255,0.14)";
+      // Lap line (spans the full marker range, post to post). Mid-grey (not
+      // white-alpha) so it stays visible over light backdrops too.
+      ctx.strokeStyle = "rgba(128,128,128,0.4)";
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(padX, lineY);
@@ -98,7 +109,7 @@ function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
       ctx.stroke();
 
       // Sector ticks.
-      ctx.strokeStyle = "rgba(255,255,255,0.16)";
+      ctx.strokeStyle = "rgba(128,128,128,0.45)";
       ctx.lineWidth = 1;
       for (const s of [1 / 3, 2 / 3]) {
         const tx = Math.round(X(s)) + 0.5;
@@ -113,8 +124,11 @@ function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
       ctx.fillRect(Math.round(w - padX) - 1.5, lineY - postH, 3, postH * 2);
 
       const slow = store.getSlow();
+      if (slow !== lastSlow) {
+        lastSlow = slow;
+        cmap = classColorMap(slow?.cars ?? []);
+      }
       const playerIdx = slow?.playerCarIdx ?? null;
-      const cmap = classColorMap(slow?.cars ?? []);
 
       const marker = (f: number, color: string, r: number, player: boolean) => {
         const cx = X(f);
@@ -145,11 +159,14 @@ function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
         marker(c.lapDistPct, color, fieldR, false);
       }
 
+      // Garaged (lapDistPct < 0, real iRacing reports -1) hides the player
+      // marker, same as the rest of the field above — otherwise it pins to the
+      // start/finish post.
       const pPct =
         store.latestFast?.lapDistPct ??
         slow?.cars.find((c) => c.isPlayer || c.carIdx === playerIdx)?.lapDistPct ??
         null;
-      if (pPct != null) marker(pPct, t.accent, playerR, true);
+      if (pPct != null && pPct >= 0) marker(pPct, t.accent, playerR, true);
 
       raf = requestAnimationFrame(draw);
     };
@@ -165,8 +182,8 @@ function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
   );
 
   return (
-    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: "8px 12px 9px", boxSizing: "border-box" }}>
-      <div style={{ marginBottom: 5 }}>
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: theme.widgetPad, boxSizing: "border-box" }}>
+      <div style={{ marginBottom: theme.space.sm }}>
         <WidgetTitle
           title="Track Order"
           theme={theme}
@@ -193,7 +210,12 @@ export const flatmapDef: WidgetDefinition<FlatmapConfig> = {
   minSize: { w: 260, h: 90 },
   defaultConfig,
   requiredPaths: ["slow", "fast"],
-  requiredCapabilities: ["relativeGaps"],
+  // Unlike Relative/Standings/SlowCarAhead, this widget never reads a gap or
+  // delta field — it only positions cars by `cars[].lapDistPct`, which every
+  // backend populates unconditionally alongside the car list. There's no
+  // capability flag for that, so it honestly requires none (`relativeGaps` was
+  // a mismatch: gating on a capability the widget doesn't actually use).
+  requiredCapabilities: [],
   configSchema: [{ key: "classColors", label: "Class colors", type: "boolean" }],
   Component: Flatmap,
 };

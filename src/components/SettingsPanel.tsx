@@ -18,6 +18,13 @@ export function SettingsPanel({ instance, theme }: Props) {
   const def = getWidgetDef(instance.type);
   if (!def) return null;
 
+  // Fresh widgets inherit the global opacity/scale/showIn ("Use general" — see
+  // layout.ts:makeInstance). Show the value that's *actually applied*
+  // (WidgetHost renders `getEffective`, too) rather than the instance's raw
+  // (often stale/irrelevant) own field, which used to make the panel lie about
+  // the current appearance and jump the moment you touched a slider.
+  const eff = layoutStore.getEffective(instance);
+
   const labelStyle: React.CSSProperties = { color: theme.colors.textDim, fontSize: 11, flex: "0 0 96px" };
   const rowStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, minHeight: 24 };
 
@@ -93,6 +100,27 @@ export function SettingsPanel({ instance, theme }: Props) {
     );
   };
 
+  const textField = (f: Extract<ConfigField, { type: "text" }>) => (
+    <div style={rowStyle} key={f.key}>
+      <span style={labelStyle}>{f.label}</span>
+      <input
+        type="text"
+        value={String(instance.config[f.key] ?? "")}
+        placeholder={f.placeholder}
+        onChange={(e) => layoutStore.updateConfig(instance.instanceId, { [f.key]: e.target.value })}
+        style={{
+          flex: 1,
+          background: "rgba(255,255,255,0.06)",
+          color: theme.colors.text,
+          border: `1px solid ${theme.colors.surfaceBorder}`,
+          borderRadius: 4,
+          padding: "2px 6px",
+          font: `500 12px ${theme.font.family}`,
+        }}
+      />
+    </div>
+  );
+
   // Compact color control: preset swatches + the native picker for a custom hex.
   // (The manager's customize modal has the full color wheel; this on-overlay
   // panel stays lightweight and doesn't depend on the manager stylesheet.)
@@ -160,15 +188,17 @@ export function SettingsPanel({ instance, theme }: Props) {
       {/* Common props */}
       <div style={rowStyle}>
         <span style={labelStyle}>Opacity</span>
-        <input type="range" min={0.2} max={1} step={0.02} value={instance.opacity}
+        <input type="range" min={0.2} max={1} step={0.02} value={eff.opacity}
+          // First touch materializes: starts from the effective (possibly
+          // inherited) value and only then overrides it, so nothing jumps.
           onChange={(e) => layoutStore.updateInstance(instance.instanceId, { opacity: Number(e.target.value), useGeneralOpacity: false })} style={{ flex: 1 }} />
-        <span style={{ width: 34, textAlign: "right" }}>{instance.opacity.toFixed(2)}</span>
+        <span style={{ width: 34, textAlign: "right" }}>{eff.opacity.toFixed(2)}</span>
       </div>
       <div style={rowStyle}>
         <span style={labelStyle}>Scale</span>
-        <input type="range" min={0.6} max={2} step={0.05} value={instance.scale}
+        <input type="range" min={0.6} max={2} step={0.05} value={eff.scale}
           onChange={(e) => layoutStore.updateInstance(instance.instanceId, { scale: Number(e.target.value), useGeneralScale: false })} style={{ flex: 1 }} />
-        <span style={{ width: 34, textAlign: "right" }}>{instance.scale.toFixed(2)}</span>
+        <span style={{ width: 34, textAlign: "right" }}>{eff.scale.toFixed(2)}</span>
       </div>
       <div style={rowStyle}>
         <span style={labelStyle}>Visible</span>
@@ -182,14 +212,17 @@ export function SettingsPanel({ instance, theme }: Props) {
         <span style={{ ...labelStyle, marginTop: 3 }}>Show when</span>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 5, flex: 1 }}>
           {SESSION_STATES.map((s) => {
-            const on = instance.showIn.includes(s.key);
+            const on = eff.showIn.includes(s.key);
             return (
               <button
                 key={s.key}
                 onClick={() =>
+                  // Materialize from the effective set (own if already
+                  // overridden, else the inherited global) so toggling one
+                  // state doesn't silently reset the others to the default.
                   layoutStore.updateInstance(instance.instanceId, {
                     useGeneralShowIn: false,
-                    showIn: on ? instance.showIn.filter((k) => k !== s.key) : [...instance.showIn, s.key],
+                    showIn: on ? eff.showIn.filter((k) => k !== s.key) : [...eff.showIn, s.key],
                   })
                 }
                 style={{
@@ -234,6 +267,7 @@ export function SettingsPanel({ instance, theme }: Props) {
         if (f.type === "number") return num(f.key, Number(value), f);
         if (f.type === "fieldList") return fieldList(f);
         if (f.type === "color") return colorField(f);
+        if (f.type === "text") return textField(f);
         // enum
         return (
           <div style={rowStyle} key={f.key}>

@@ -61,7 +61,12 @@ export function Toolbar({ theme, active, profiles, carName, boundProfile }: Prop
       </select>
       <button style={btn} onClick={() => {
         const name = window.prompt("New profile name");
-        if (name) layoutStore.newProfile(name);
+        if (!name) return;
+        // newProfile duplicates the *current* layout and returns an error
+        // string on an empty/duplicate name instead of silently no-op'ing —
+        // surface it here too (the full inline UI lives in the manager).
+        const err = layoutStore.newProfile(name);
+        if (err) window.alert(err);
       }}>+ Profile</button>
       <button style={{ ...btn, borderColor: theme.colors.loss, color: theme.colors.loss }} onClick={() => {
         if (profiles.length > 1 && window.confirm(`Delete profile "${active}"?`)) layoutStore.deleteProfile(active);

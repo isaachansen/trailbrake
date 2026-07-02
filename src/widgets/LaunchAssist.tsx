@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
+import { WidgetTitle } from "./WidgetTitle";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface LaunchAssistConfig {
@@ -25,7 +26,8 @@ function LaunchAssist({ theme, config }: BaseWidgetProps<LaunchAssistConfig>) {
   const throttleMarker = useRef<HTMLDivElement | null>(null);
   const brakeBar = useRef<HTMLDivElement | null>(null);
   const brakeVal = useRef<HTMLSpanElement | null>(null);
-  const root = useRef<HTMLDivElement | null>(null);
+  const bars = useRef<HTMLDivElement | null>(null);
+  const status = useRef<HTMLSpanElement | null>(null);
   const live = useRef({ config });
   live.current = { config };
 
@@ -37,7 +39,15 @@ function LaunchAssist({ theme, config }: BaseWidgetProps<LaunchAssistConfig>) {
       const speed = fast?.speedMs ?? 0;
       const stopped = speed < 2;
 
-      if (root.current) root.current.style.opacity = stopped ? "1" : "0.15";
+      // Only the bars block dims when the car is moving — the header/title stays
+      // fully legible at all times (audit 7: was ghosting to 0.15 opacity,
+      // functionally invisible on bright footage). Floor raised to 0.45 so the
+      // widget still reads as "present" rather than vanishing.
+      if (bars.current) bars.current.style.opacity = stopped ? "1" : "0.45";
+      if (status.current) {
+        status.current.textContent = stopped ? "ARMED" : "MOVING";
+        status.current.style.color = stopped ? t.gain : t.textDim2;
+      }
 
       const setBar = (bar: HTMLDivElement | null, val: HTMLSpanElement | null, v: number | null, target: number, color: string) => {
         const pct = v != null ? Math.max(0, Math.min(1, v)) * 100 : 0;
@@ -107,10 +117,17 @@ function LaunchAssist({ theme, config }: BaseWidgetProps<LaunchAssistConfig>) {
     fontVariantNumeric: "tabular-nums",
   };
 
+  const statusLabel: React.CSSProperties = {
+    fontFamily: theme.font.label,
+    fontWeight: 700,
+    fontSize: "0.62em",
+    letterSpacing: "0.1em",
+  };
+
   return (
-    <div ref={root} style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "12px 16px", boxSizing: "border-box", color: t.text, transition: "opacity 0.3s" }}>
-      <div style={{ fontFamily: theme.font.label, textAlign: "center", fontWeight: 700, fontSize: "0.6em", letterSpacing: "0.14em", color: t.textDim, marginBottom: theme.space.xs }}>LAUNCH ASSIST</div>
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "space-evenly", gap: theme.space.md }}>
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: theme.widgetPad, boxSizing: "border-box", color: t.text }}>
+      <WidgetTitle title="Launch Assist" theme={theme} right={<span ref={status} style={statusLabel}>ARMED</span>} />
+      <div ref={bars} style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "space-evenly", gap: theme.space.md, marginTop: theme.space.sm, transition: "opacity 0.3s" }}>
         <div>
           <div style={labelStyle}>
             <span style={channelLabel(t.clutch)}>CLUTCH</span>

@@ -45,9 +45,12 @@ pub struct SessionInfoMin {
     /// track distance so neighbours don't jump a full lap across start/finish.
     pub car_est_lap_time: Option<f32>,
     pub drivers: Vec<DriverEntry>,
-    /// The current session's type label, e.g. "Practice", "Qualify", "Race",
-    /// parsed from `SessionInfo.Sessions[].SessionType` / `SessionName`.
-    pub session_type: Option<String>,
+    /// Session-type labels for **every** entry in `SessionInfo.Sessions[]`,
+    /// keyed by `SessionNum` — e.g. `[(0, "Practice"), (1, "Qualify"),
+    /// (2, "Race")]`. The live `SessionNum` telemetry var selects the active
+    /// one (see [`SessionInfoMin::session_type_for`]), so the reported type
+    /// tracks the weekend as it advances Practice→Qualy→Race.
+    pub session_types: Vec<(i32, String)>,
     /// Sector-start fractions (0..1) from `SplitTimeInfo.Sectors[].SectorStartPct`,
     /// in `SectorNum` order. iRacing exposes only these boundaries — per-sector
     /// times are computed by the connector from `LapDistPct` crossings.
@@ -58,6 +61,17 @@ pub struct SessionInfoMin {
     /// Track length (meters) from `WeekendInfo:TrackLength` ("X.XX km"). Used to
     /// turn the pit-stall track-fraction into a distance.
     pub track_length_m: Option<f32>,
+}
+
+impl SessionInfoMin {
+    /// The type label of session `num` (the live `SessionNum` telemetry var).
+    /// Falls back to the first parsed session when `num` is unavailable or not
+    /// found — better a best-effort label than none while telemetry warms up.
+    pub fn session_type_for(&self, num: Option<i32>) -> Option<String> {
+        num.and_then(|n| self.session_types.iter().find(|(sn, _)| *sn == n))
+            .or_else(|| self.session_types.first())
+            .map(|(_, label)| label.clone())
+    }
 }
 
 /// Decode iRacing's NUL-terminated session-info block.
@@ -160,7 +174,7 @@ pub fn parse_min(yaml: &str) -> SessionInfoMin {
         driver_car_idx: None,
         car_est_lap_time: None,
         drivers: Vec::new(),
-        session_type: None,
+        session_types: Vec::new(),
         sector_starts: Vec::new(),
         // WeekendInfo values: "80.00 kph" / "4.318 km" — take the leading number.
         pit_speed_limit_kph: scan_value(yaml, "TrackPitSpeedLimit").and_then(|s| parse_leading_f32(&s)),
@@ -263,11 +277,10 @@ pub fn parse_min(yaml: &str) -> SessionInfoMin {
         i += 1;
     }
 
-    // Parse the current session type from `SessionInfo.Sessions[]`. The active
-    // session is selected by `SessionNum` (an int the telemetry var provides);
-    // here we take the first session entry's type/name as a best-effort default.
-    // The connector can override this with the live `SessionNum` if needed.
-    info.session_type = scan_session_type(yaml);
+    // Parse every session's type from `SessionInfo.Sessions[]`, keyed by
+    // `SessionNum`; the connector selects the active one with the live
+    // `SessionNum` telemetry var each poll.
+    info.session_types = scan_session_types(yaml);
 
     info.sector_starts = scan_sector_starts(yaml);
 
@@ -331,10 +344,23 @@ fn scan_sector_starts(yaml: &str) -> Vec<f32> {
     sectors.into_iter().map(|(_, p)| p).collect()
 }
 
-/// Extract the session type label from the `SessionInfo.Sessions[]` block.
-/// Reads `SessionType` (e.g. "Open_Qualify") or falls back to `SessionName`,
-/// returning a human-friendly label.
-fn scan_session_type(yaml: &str) -> Option<String> {
+/// Extract `(SessionNum, type label)` for every entry in the
+/// `SessionInfo.Sessions[]` block. Each entry's label comes from its
+/// `SessionType` (e.g. "Open_Qualify", normalized) or falls back to its
+/// `SessionName`.
+///
+/// Example block:
+/// ```text
+/// SessionInfo:
+///  Sessions:
+///  - SessionNum: 0
+///    SessionType: Practice
+///  - SessionNum: 1
+///    SessionType: Lone_Qualify
+///  - SessionNum: 2
+///    SessionType: Race
+/// ```
+fn scan_session_types(yaml: &str) -> Vec<(i32, String)> {
     let lines: Vec<&str> = yaml.lines().collect();
     let mut i = 0;
     // Find `SessionInfo:` at indent 0.
@@ -345,24 +371,43 @@ fn scan_session_type(yaml: &str) -> Option<String> {
         }
         i += 1;
     }
-    // Walk the SessionInfo block.
-    let mut session_type: Option<String> = None;
-    let mut session_name: Option<String> = None;
+
+    // Collect per-entry (num, type, name), flushing at each new list item.
+    fn flush(
+        out: &mut Vec<(i32, String)>,
+        num: &mut Option<i32>,
+        ty: &mut Option<String>,
+        name: &mut Option<String>,
+    ) {
+        if let (Some(n), Some(label)) = (num.take(), ty.take().or_else(|| name.take())) {
+            out.push((n, label));
+        }
+        *ty = None;
+        *name = None;
+    }
+
+    let mut out: Vec<(i32, String)> = Vec::new();
+    let mut cur_num: Option<i32> = None;
+    let mut cur_type: Option<String> = None;
+    let mut cur_name: Option<String> = None;
     while i < lines.len() {
         let line = lines[i];
         if !line.trim().is_empty() && indent(line) == 0 {
             break;
         }
         let t = line.trim_start();
-        if let Some(x) = t.strip_prefix("SessionType:") {
-            let raw = unquote(x);
-            session_type = Some(normalize_session_type(&raw));
+        if let Some(v) = t.strip_prefix("- SessionNum:") {
+            flush(&mut out, &mut cur_num, &mut cur_type, &mut cur_name);
+            cur_num = v.trim().parse().ok();
+        } else if let Some(x) = t.strip_prefix("SessionType:") {
+            cur_type = Some(normalize_session_type(&unquote(x)));
         } else if let Some(x) = t.strip_prefix("SessionName:") {
-            session_name = Some(unquote(x));
+            cur_name = Some(unquote(x));
         }
         i += 1;
     }
-    session_type.or(session_name)
+    flush(&mut out, &mut cur_num, &mut cur_type, &mut cur_name);
+    out
 }
 
 /// Map iRacing session type strings to a coarse label widgets can switch on.
@@ -469,7 +514,67 @@ SplitTimeInfo:
     #[test]
     fn parses_session_type() {
         let info = parse_min(SAMPLE);
-        assert_eq!(info.session_type.as_deref(), Some("Qualify"));
+        assert_eq!(info.session_types, vec![(0, "Qualify".to_string())]);
+        assert_eq!(info.session_type_for(Some(0)).as_deref(), Some("Qualify"));
+    }
+
+    // A Practice→Qualy→Race weekend's `SessionInfo` block (types as iRacing
+    // emits them, pre-normalization).
+    const MULTI_SESSION: &str = "\
+---
+WeekendInfo:
+ TrackName: spa
+SessionInfo:
+ Sessions:
+ - SessionNum: 0
+   SessionType: Practice
+   SessionName: PRACTICE
+ - SessionNum: 1
+   SessionType: Lone_Qualify
+   SessionName: QUALIFY
+ - SessionNum: 2
+   SessionType: Race
+   SessionName: RACE
+SplitTimeInfo:
+ Sectors:
+ - SectorNum: 0
+   SectorStartPct: 0.0000
+ ";
+
+    #[test]
+    fn parses_all_session_types_keyed_by_num() {
+        let info = parse_min(MULTI_SESSION);
+        assert_eq!(
+            info.session_types,
+            vec![
+                (0, "Practice".to_string()),
+                (1, "Qualify".to_string()),
+                (2, "Race".to_string()),
+            ]
+        );
+    }
+
+    /// Live `SessionNum` selects the active session's type — the fix for the
+    /// "Practice all weekend" bug (audit B1).
+    #[test]
+    fn session_type_follows_live_session_num() {
+        let info = parse_min(MULTI_SESSION);
+        assert_eq!(info.session_type_for(Some(0)).as_deref(), Some("Practice"));
+        assert_eq!(info.session_type_for(Some(1)).as_deref(), Some("Qualify"));
+        assert_eq!(info.session_type_for(Some(2)).as_deref(), Some("Race"));
+        // Unknown / missing SessionNum → best-effort first session.
+        assert_eq!(info.session_type_for(Some(9)).as_deref(), Some("Practice"));
+        assert_eq!(info.session_type_for(None).as_deref(), Some("Practice"));
+        // No sessions parsed at all → honest None, never a guess.
+        assert_eq!(SessionInfoMin::default().session_type_for(Some(0)), None);
+    }
+
+    /// An entry with no `SessionType` falls back to its `SessionName`.
+    #[test]
+    fn session_type_falls_back_to_name() {
+        let yaml = "---\nSessionInfo:\n Sessions:\n - SessionNum: 0\n   SessionName: HOSTED FUN\n";
+        let info = parse_min(yaml);
+        assert_eq!(info.session_types, vec![(0, "HOSTED FUN".to_string())]);
     }
 
     #[test]

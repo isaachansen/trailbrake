@@ -1,7 +1,7 @@
 {
   "identifier": "default",
-  "description": "Core + event + global-shortcut access for the manager and overlay windows.",
-  "windows": ["manager", "overlay"],
+  "description": "Core + event + global-shortcut + updater/process access for the manager window (settings, hotkey capture, update flow, relaunch). Also scoped opener access, just for the Buy Me a Coffee link. The overlay window gets a narrower grant — see capabilities/overlay.json — since it never drives any of those plugins from its webview.",
+  "windows": ["manager"],
   "permissions": [
     "core:default",
     "core:event:default",
@@ -9,6 +9,10 @@
     "core:webview:default",
     "global-shortcut:default",
     "updater:default",
-    "process:default"
+    "process:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://www.buymeacoffee.com/*" }]
+    }
   ]
 }

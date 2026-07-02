@@ -85,8 +85,115 @@ const FIELD: MockCar[] = [
   { carIdx: 12, name: "J. Webb", number: "88", country: "US", classId: 2, className: "GT3", classColor: GT3, car: "Audi R8 LMS GT3 EVO II", license: "R 1.49", irating: 850, iratingDelta: 61, positionsGained: -1, tyre: "M", bestLapS: 108.2, basePos: 13, baseGap: -18.5 },
 ];
 
-function classPosition(car: MockCar): number {
-  return FIELD.filter((c) => c.classId === car.classId && c.basePos <= car.basePos).length;
+/** This car's live gap to the player (seconds; +ahead / -behind), continuously
+ *  evolving so any position change happens by crossing zero rather than
+ *  teleporting. Most of the field just wobbles gently around its steady-state
+ *  gap; a few cars near the player get a slower, larger-amplitude drift so the
+ *  Relative widget's swap animation gets regularly exercised:
+ *   - car 3 (directly ahead of the player) drifts through zero on a 20s loop —
+ *     the player catches and passes it, then gets repassed, twice a minute.
+ *   - cars 5 and 6 (both behind the player) drift on the same 23s period but
+ *     in near-opposite phase, so their gap difference swings through zero
+ *     twice a lap — 6 catches and passes 5, then drops back — a swap that
+ *     doesn't involve the player at all.
+ *  None of this ever touches `baseGap` directly — it's added on top, so the
+ *  steady-state field order is unchanged when the drift is near zero. */
+function relativeGap(c: MockCar, t: number): number {
+  if (c.carIdx === PLAYER_IDX) return 0;
+  const wobble = 0.6 * Math.sin(t * 0.3 + c.carIdx);
+  if (c.carIdx === 3) return c.baseGap + 1.7 * Math.sin((TAU * t) / 20);
+  if (c.carIdx === 5) return c.baseGap + 1.1 * Math.sin((TAU * t) / 23 + 0.2 + Math.PI);
+  if (c.carIdx === 6) return c.baseGap + 2.3 * Math.sin((TAU * t) / 23 + 0.2);
+  return c.baseGap + wobble;
+}
+
+/** Rank the whole field by live gap (descending — furthest ahead first), both
+ *  overall and within class, so `position`/`classPosition` track the same
+ *  order the Relative widget's gaps imply instead of staying frozen at the
+ *  starting grid slot. */
+function computeRanks(gapByIdx: Map<number, number>): { posByIdx: Map<number, number>; classPosByIdx: Map<number, number> } {
+  const byGapDesc = (a: MockCar, b: MockCar) => (gapByIdx.get(b.carIdx) ?? 0) - (gapByIdx.get(a.carIdx) ?? 0);
+
+  const posByIdx = new Map<number, number>();
+  [...FIELD].sort(byGapDesc).forEach((c, i) => posByIdx.set(c.carIdx, i + 1));
+
+  const classPosByIdx = new Map<number, number>();
+  const byClass = new Map<number, MockCar[]>();
+  for (const c of FIELD) {
+    const group = byClass.get(c.classId);
+    if (group) group.push(c);
+    else byClass.set(c.classId, [c]);
+  }
+  for (const group of byClass.values()) {
+    group.sort(byGapDesc).forEach((c, i) => classPosByIdx.set(c.carIdx, i + 1));
+  }
+
+  return { posByIdx, classPosByIdx };
+}
+
+/** How much history to backfill at mock start, seconds. Close to the store's
+ *  ~9 s ring (`MAX_HISTORY` in store.ts) so the Input Graph preview opens
+ *  already full instead of needing ~9 s of real ticking to fill in. */
+const PRESEED_SECONDS = 10;
+
+/** One fast-path frame at elapsed time `t` (seconds), given carried-over gear/
+ *  clutch state — the same waveform the live interval below uses. Factored out
+ *  so the pre-seed backfill and the live ticker can't drift apart. */
+function fastFrameAt(
+  t: number,
+  tick: number,
+  readerHz: number,
+  gearState: { prevGear: number | null; clutchAnim: number }
+): FastSample {
+  const pct = (((t % LAP_SECONDS) + LAP_SECONDS) % LAP_SECONDS) / LAP_SECONDS;
+  const corner = Math.sin(pct * TAU * 5);
+  const throttle = clamp01(0.5 + 0.5 * corner);
+  const brake = clamp01(Math.max(-corner - 0.3, 0));
+  const speed = 30 + 45 * throttle;
+  const gear = speed < 35 ? 2 : speed < 45 ? 3 : speed < 55 ? 4 : speed < 65 ? 5 : 6;
+  const rpm = 4000 + 4500 * (0.3 + 0.7 * throttle) * (0.6 + 0.4 * Math.abs(corner));
+  const steering = 0.6 * Math.sin(pct * TAU * 5 + 0.4);
+
+  if (gearState.prevGear !== null && gear !== gearState.prevGear) gearState.clutchAnim = 1;
+  gearState.prevGear = gear;
+  gearState.clutchAnim *= 0.8;
+  const clutch = clamp01(Math.max(gearState.clutchAnim, speed < 32 ? 0.6 : 0));
+
+  return {
+    ts: t,
+    tick,
+    readerHz,
+    speedMs: speed,
+    rpm,
+    gear,
+    throttle,
+    brake,
+    clutch,
+    steeringRad: steering,
+    lapDistPct: pct,
+    currentLapS: pct * LAP_SECONDS,
+    brakeBiasPct: 0.56,
+    absActive: brake > 0.8,
+    tcActive: false,
+    carLeft: Math.abs(12 * Math.sin(t * 0.5 + 5)) < 3,
+    carRight: Math.abs(12 * Math.sin(t * 0.5 + 3)) < 3,
+  };
+}
+
+/** Backfill the store's history ring with `PRESEED_SECONDS` of synthetic
+ *  samples ending "now" (ts approaching 0), so a freshly opened Input Graph
+ *  preview shows a full trace immediately instead of ~80% empty space that
+ *  only fills in as real ticks arrive. */
+function seedFastHistory(target: TelemetryStore): void {
+  const n = Math.round(PRESEED_SECONDS * FAST_HZ);
+  const gearState = { prevGear: null as number | null, clutchAnim: 0 };
+  const samples: FastSample[] = [];
+  for (let i = 0; i < n; i++) {
+    const t = -PRESEED_SECONDS + i / FAST_HZ;
+    samples.push(fastFrameAt(t, i - n, FAST_HZ, gearState));
+  }
+  target.history = samples;
+  target.latestFast = samples[samples.length - 1] ?? null;
 }
 
 export function startBrowserMock(target: TelemetryStore = store): () => void {
@@ -109,6 +216,8 @@ export function startBrowserMock(target: TelemetryStore = store): () => void {
     spectator: true,
     pitInfo: true,
   });
+
+  seedFastHistory(target);
 
   const start = performance.now();
   let lap = 0;
@@ -183,9 +292,11 @@ export function startBrowserMock(target: TelemetryStore = store): () => void {
     const corner = Math.sin(pct * TAU * 5);
     const brake = clamp01(Math.max(-corner - 0.3, 0));
 
+    const gapByIdx = new Map(FIELD.map((c) => [c.carIdx, relativeGap(c, t)]));
+    const { posByIdx, classPosByIdx } = computeRanks(gapByIdx);
+
     const cars: CarEntry[] = FIELD.map((c) => {
-      const wobble = 0.6 * Math.sin(t * 0.3 + c.carIdx);
-      const gap = c.carIdx === PLAYER_IDX ? 0 : c.baseGap + wobble;
+      const gap = gapByIdx.get(c.carIdx)!;
 
       // Radar: place the two nearest cars in left/right lanes weaving past the
       // player; everyone else sits off-radar at a coarse gap-derived distance.
@@ -209,8 +320,11 @@ export function startBrowserMock(target: TelemetryStore = store): () => void {
         carClassId: c.classId,
         classColor: c.classColor,
         carClassName: c.className,
-        position: c.basePos,
-        classPosition: classPosition(c),
+        // Live rank by gap (not the static starting grid slot) so the position
+        // badge in Relative/Standings actually moves when a gap crosses zero —
+        // matching the row reorder the overtake animation is demoing.
+        position: posByIdx.get(c.carIdx) ?? c.basePos,
+        classPosition: classPosByIdx.get(c.carIdx) ?? 1,
         lap,
         lapDistPct: ((t / LAP_SECONDS) % 1 + gap / LAP_SECONDS + 1) % 1,
         gapToPlayerS: gap,
@@ -242,19 +356,27 @@ export function startBrowserMock(target: TelemetryStore = store): () => void {
       lapsRemaining: null,
       totalCars: FIELD.length,
       lap,
-      position: player.basePos,
-      classPosition: classPosition(player),
+      position: posByIdx.get(PLAYER_IDX) ?? 5,
+      classPosition: classPosByIdx.get(PLAYER_IDX) ?? 1,
       lastLapS: bestLap,
       bestLapS: bestLap,
       currentLapS: t % LAP_SECONDS,
-      deltaBestS: delta,
-      deltaSessionBestS: delta + 0.1,
+      // A delta is meaningless without a best lap to compare against — real
+      // sims report null here too until one exists; mirror that instead of
+      // showing a number next to an empty BEST (see LapTimer/DeltaBar's own
+      // defensive gate, which this keeps honest at the source).
+      deltaBestS: bestLap != null ? delta : null,
+      deltaSessionBestS: bestLap != null ? delta + 0.1 : null,
       fuelL: Math.max(60 - t * 0.02, 0),
       fuelPerLapL: 2.4,
       cars,
       playerCarIdx: PLAYER_IDX,
       spectatedCarIdx: PLAYER_IDX,
-      carName: "Ferrari 296 GT3",
+      // Must match the player's own roster entry (FIELD[PLAYER_IDX].car) — a
+      // mismatched mock car name is self-inconsistent and (per S2) must never
+      // drive a real per-car profile switch anyway, but it should still be
+      // honest in isolation (e.g. widgets that show "your car").
+      carName: player.car,
       onTrack: true,
       inGarage: false,
       // Tie the screen-edge spotter glow to the two weaving "near" cars so it

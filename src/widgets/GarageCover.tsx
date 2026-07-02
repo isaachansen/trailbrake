@@ -3,6 +3,7 @@
 // a live countdown and the upcoming session. Slow-path; uses session info only.
 
 import { useSlow } from "../store/hooks";
+import { classifySessionType } from "./contract";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface GarageCoverConfig {
@@ -23,6 +24,13 @@ function GarageCover({ theme, config }: BaseWidgetProps<GarageCoverConfig>) {
   const slow = useSlow();
   const track = (slow?.trackName ?? "").toUpperCase();
   const session = (slow?.sessionType ?? "Session").toUpperCase();
+  // Headline reflects what's actually about to happen, derived from the real
+  // session type — a race weekend is "grid forming", anything else is honestly
+  // just "in the garage" (there's no live signal that distinguishes, say, a
+  // qualifying out-lap wait from a practice one).
+  const sessKind = classifySessionType(slow?.sessionType);
+  const headline = sessKind === "race" ? "GRID FORMING" : sessKind === "qualy" ? "QUALIFYING" : "IN THE GARAGE";
+  const timeLeft = slow?.timeRemainingS;
 
   return (
     <div
@@ -62,11 +70,16 @@ function GarageCover({ theme, config }: BaseWidgetProps<GarageCoverConfig>) {
       {/* headline + countdown — centered in the remaining space */}
       <div style={{ position: "relative", flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", minHeight: 0 }}>
         <div style={{ fontFamily: theme.font.label, fontWeight: 600, fontSize: "clamp(10px, 2.7cqw, 16px)", letterSpacing: "0.32em", color: t.accent, lineHeight: 1 }}>PLEASE STAND BY</div>
-        <div style={{ fontWeight: 700, fontSize: "clamp(30px, 12cqw, 80px)", lineHeight: 0.92, color: "#fff", marginTop: "0.2em", whiteSpace: "nowrap" }}>GRID FORMING</div>
-        <div style={{ marginTop: "0.45em", display: "flex", alignItems: "baseline", gap: "0.6em" }}>
-          <span style={{ fontFamily: theme.font.label, fontWeight: 600, fontSize: "clamp(9px, 2.3cqw, 14px)", letterSpacing: "0.16em", color: t.textDim }}>SESSION STARTS IN</span>
-          <span style={{ fontFamily: theme.font.mono, fontWeight: 700, fontSize: "clamp(20px, 5.4cqw, 33px)", color: t.amber, lineHeight: 1 }}>{fmtClock(slow?.timeRemainingS)}</span>
-        </div>
+        <div style={{ fontWeight: 700, fontSize: "clamp(30px, 12cqw, 80px)", lineHeight: 0.92, color: "#fff", marginTop: "0.2em", whiteSpace: "nowrap" }}>{headline}</div>
+        {/* This is the current session's time REMAINING, not a countdown to its
+            start — there's no "starts in" signal from the sim, so label it
+            honestly and hide it entirely rather than show a fabricated "--:--". */}
+        {timeLeft != null && (
+          <div style={{ marginTop: "0.45em", display: "flex", alignItems: "baseline", gap: "0.6em" }}>
+            <span style={{ fontFamily: theme.font.label, fontWeight: 600, fontSize: "clamp(9px, 2.3cqw, 14px)", letterSpacing: "0.16em", color: t.textDim }}>SESSION TIME LEFT</span>
+            <span style={{ fontFamily: theme.font.mono, fontWeight: 700, fontSize: "clamp(20px, 5.4cqw, 33px)", color: t.amber, lineHeight: 1 }}>{fmtClock(timeLeft)}</span>
+          </div>
+        )}
       </div>
 
       {/* footer */}

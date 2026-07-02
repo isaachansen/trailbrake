@@ -96,15 +96,12 @@ function TelemetryInspector({ theme, config }: BaseWidgetProps<TelemetryInspecto
         padding: theme.widgetPad,
         boxSizing: "border-box",
         color: t.text,
-        background: t.surface,
-        border: `1px solid ${t.surfaceBorder}`,
-        borderRadius: theme.radius,
-        backdropFilter: theme.panelBlur,
       }}
     >
       <WidgetTitle title="Telemetry Inspector" theme={theme} />
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
+      <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
+      <div style={{ height: "100%", overflowY: "auto", overflowX: "hidden" }}>
       {config.showFast && fast && (
         <div>
           <div style={section}>Fast · {fast.readerHz.toFixed(0)}Hz · tick {fast.tick}</div>
@@ -164,6 +161,19 @@ function TelemetryInspector({ theme, config }: BaseWidgetProps<TelemetryInspecto
         </div>
       )}
       </div>
+      {/* Bottom fade — a scroll cue hinting there's more content below. */}
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: "1.4em",
+          pointerEvents: "none",
+          background: `linear-gradient(to bottom, transparent, ${t.surface})`,
+        }}
+      />
+      </div>
     </div>
   );
 }
@@ -174,7 +184,8 @@ export const telemetryInspectorDef: WidgetDefinition<TelemetryInspectorConfig> =
   defaultSize: { w: 320, h: 420 },
   minSize: { w: 240, h: 200 },
   defaultConfig,
-  requiredPaths: ["slow"],
+  // Reads store.latestFast directly (the "Fast" section) in addition to slow.
+  requiredPaths: ["slow", "fast"],
   requiredCapabilities: [],
   configSchema: [
     { key: "showFast", label: "Show fast data", type: "boolean" },

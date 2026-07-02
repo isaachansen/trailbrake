@@ -18,6 +18,11 @@ const EVT_SELECT = "overlay://select-sync";
 const EVT_UNITS = "overlay://units-sync";
 const EVT_PREVIEW_MOCK = "overlay://preview-mock-sync";
 const EVT_PANEL_STYLE = "overlay://panel-style-sync";
+/** "Resend your current layout" — broadcast once on startup so a window that
+ *  opens after the other has already made edits doesn't miss them (a normal
+ *  layout broadcast sent before this window's listener registered is dropped;
+ *  this asks whoever's already up to say it again). */
+const EVT_LAYOUT_REQUEST = "overlay://layout-request";
 
 export async function initSync(): Promise<() => void> {
   if (!isTauri()) return () => {};
@@ -41,6 +46,10 @@ export async function initSync(): Promise<() => void> {
     if (e.payload.nonce === NONCE) return;
     layoutStore.applyExternal(e.payload.blob);
   });
+  const unLayoutRequest = await listen<{ nonce: string }>(EVT_LAYOUT_REQUEST, (e) => {
+    if (e.payload.nonce === NONCE) return;
+    layoutStore.broadcastNow();
+  });
   const unSelect = await listen<{ nonce: string; id: string | null }>(EVT_SELECT, (e) => {
     if (e.payload.nonce === NONCE) return;
     layoutStore.applyExternalSelection(e.payload.id);
@@ -58,6 +67,11 @@ export async function initSync(): Promise<() => void> {
     settingsStore.applyPanelStyle(e.payload.s);
   });
 
+  // Ask whichever window is already open to resend its current layout — our
+  // own broadcasts before this listener registered above would otherwise be
+  // silently dropped, leaving us on a stale snapshot until the next edit.
+  void emit(EVT_LAYOUT_REQUEST, { nonce: NONCE });
+
   return () => {
     layoutStore.setBroadcaster(null);
     layoutStore.setSelectionBroadcaster(null);
@@ -65,6 +79,7 @@ export async function initSync(): Promise<() => void> {
     settingsStore.setPreviewMockBroadcaster(null);
     settingsStore.setPanelStyleBroadcaster(null);
     unLayout();
+    unLayoutRequest();
     unSelect();
     unUnits();
     unPreviewMock();

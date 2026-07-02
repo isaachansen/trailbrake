@@ -66,7 +66,15 @@ export function classColorMap(cars: { carClassId: number | null; bestLapS: numbe
     const cur = best.get(id);
     if (cur == null || b < cur) best.set(id, b);
   }
-  const ids = [...best.keys()].sort((a, b) => (best.get(a)! - best.get(b)!) || a - b);
+  // Deterministic order even when laps are missing: classes with no best lap
+  // (Infinity) compare equal, and equal bests tiebreak by class id — so the
+  // assignment can't flap between updates or differ across widgets.
+  const ids = [...best.keys()].sort((a, b) => {
+    const ba = best.get(a)!;
+    const bb = best.get(b)!;
+    if (ba === bb || (ba === Infinity && bb === Infinity)) return a - b;
+    return ba - bb;
+  });
   const map = new Map<number, string>();
   ids.forEach((id, i) => map.set(id, CLASS_PALETTE[i % CLASS_PALETTE.length]));
   return map;

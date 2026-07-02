@@ -79,7 +79,10 @@ function HeartRate({ config, size, theme }: BaseWidgetProps<HeartRateConfig>) {
           style={{ width: size.w, height: size.h, border: "none", background: "transparent", pointerEvents: "none" }}
         />
       ) : mock ? (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: heartPx * 0.2 }}>
+        // A small paddingBottom nudges this centered column up: the glow under
+        // the heart reads as more "weight" than the plain BPM text above it, so
+        // dead-center leaves the top looking emptier than the bottom (audit §7).
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: heartPx * 0.2, paddingBottom: minDim * 0.05 }}>
           <div ref={heartRef} style={{ transformOrigin: "center", willChange: "transform", filter: `drop-shadow(0 0 ${heartPx * 0.16}px ${t.accent}66)` }}>
             <svg width={heartPx} height={heartPx} viewBox="0 0 24 24" style={{ display: "block" }}>
               <path
@@ -110,10 +113,10 @@ export const heartRateDef: WidgetDefinition<HeartRateConfig> = {
   defaultSize: { w: 200, h: 200 },
   minSize: { w: 100, h: 100 },
   defaultConfig,
-  requiredPaths: [],
+  requiredPaths: ["slow"],
   requiredCapabilities: [],
   configSchema: [
-    { key: "sessionId", label: "HypeRate session ID", type: "enum", options: [{ value: "", label: "Enter in config…" }] },
+    { key: "sessionId", label: "HypeRate session ID", type: "text", placeholder: "HypeRate session id" },
     { key: "widgetName", label: "Widget style", type: "enum", options: [{ value: "Bouncing_Heart_Widget", label: "Bouncing Heart" }, { value: "Minimal", label: "Minimal" }, { value: "Pulse_Ring_Widget", label: "Pulse Ring" }] },
   ],
   Component: HeartRate,

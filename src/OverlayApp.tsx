@@ -3,7 +3,7 @@
 // and hidden natively by the backend (session-driven or via the manager); this
 // component only paints whatever the layout store holds.
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { defaultTheme } from "./theme/theme";
 import { initTransport, isTauri } from "./store/transport";
 import { editModeStore } from "./store/editMode";
@@ -43,20 +43,44 @@ export default function OverlayApp() {
   // (sessionActive), the mock stops and the backend's live data takes over.
   // Tauri-only — the browser dev shell already runs the mock continuously.
   const idlePreview = isTauri() && status.overlayVisible && !status.sessionActive && settings.previewMock;
+  // In a plain browser there's no backend at all, so the mock is the *only*
+  // source, running continuously (see the transport module) — carName here is
+  // never real telemetry in that context either.
+  const mockActive = idlePreview || !isTauri();
   useEffect(() => {
     if (!idlePreview) return;
-    return startBrowserMock(store);
+    const stop = startBrowserMock(store);
+    return () => {
+      stop();
+      // Drop the last mock frame so widgets fall back to their honest empty
+      // states instead of freezing on fake data once the mock stops (e.g. a
+      // real session is about to take over, or preview was turned off).
+      store.clear();
+    };
   }, [idlePreview]);
+
+  // If a real session ends while we're *not* falling back to the idle-preview
+  // mock (overlay hidden, or demo data disabled), the last live frame would
+  // otherwise render forever — clear it so widgets show their empty states.
+  const wasSessionActive = useRef(status.sessionActive);
+  useEffect(() => {
+    if (wasSessionActive.current && !status.sessionActive && !idlePreview) {
+      store.clear();
+    }
+    wasSessionActive.current = status.sessionActive;
+  }, [status.sessionActive, idlePreview]);
 
   // Viewport-level layer that screen-effect widgets (Spotter edge glow) portal
   // into — they can't reach the viewport from inside their backdrop-filtered box.
   const [screenLayer, setScreenLayer] = useState<HTMLDivElement | null>(null);
 
   // Per-car profile auto-switch: when the car model changes, switch to its bound
-  // profile (if any).
+  // profile (if any). Mock-sourced car names must never drive this — they'd
+  // silently persist a per-car profile switch to disk from fake data (S2).
   useEffect(() => {
+    if (mockActive) return;
     layoutStore.handleCar(carName);
-  }, [carName]);
+  }, [carName, mockActive]);
 
   // Drop any widget selection when leaving edit mode, so no stale selection ring /
   // settings panel lingers in race mode.
@@ -68,10 +92,12 @@ export default function OverlayApp() {
   useEffect(() => {
     let cleanup: (() => void) | undefined;
     let cancelled = false;
-    initTransport().then((c) => {
-      if (cancelled) c();
-      else cleanup = c;
-    });
+    initTransport()
+      .then((c) => {
+        if (cancelled) c();
+        else cleanup = c;
+      })
+      .catch((err) => console.error("Failed to start telemetry transport:", err));
     void layoutStore.init();
     return () => {
       cancelled = true;
@@ -84,6 +110,15 @@ export default function OverlayApp() {
   // the authority for what's actually on screen, and a widget's 2-D spot drives
   // its 3-D placement. Rects are converted to physical pixels (× DPR) to match
   // what Windows Graphics Capture reads.
+  //
+  // `layout` changes on every store mutation, including drags at pointer-move
+  // rate — without throttling this would call `vr_set_layout` (an IPC round
+  // trip) up to 60×/s. We skip sends whose VR-relevant fields are byte-for-byte
+  // unchanged (e.g. an unrelated config edit) and otherwise throttle to ~10 Hz,
+  // trailing-edge so the final position after a drag always lands.
+  const vrLastKeyRef = useRef("");
+  const vrLastSentAtRef = useRef(0);
+  const vrPendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!vr.active) return;
     const current = layout.profiles[layout.active];
@@ -106,8 +141,31 @@ export default function OverlayApp() {
         depthM: inst.vrDepth ?? 0,
       });
     }
-    void controls.vrSetLayout(payload);
+
+    const key = JSON.stringify(payload);
+    if (key === vrLastKeyRef.current) return; // no VR-relevant change
+
+    const send = () => {
+      vrLastKeyRef.current = key;
+      vrLastSentAtRef.current = performance.now();
+      void controls.vrSetLayout(payload);
+    };
+    const elapsed = performance.now() - vrLastSentAtRef.current;
+    if (vrPendingTimerRef.current) clearTimeout(vrPendingTimerRef.current);
+    if (elapsed >= 100) {
+      send();
+    } else {
+      vrPendingTimerRef.current = window.setTimeout(send, 100 - elapsed);
+    }
   }, [vr.active, layout, caps, sessionState]);
+
+  // Flush the throttle timer on unmount so it doesn't fire (and touch a torn-
+  // down VR session) after the overlay is gone.
+  useEffect(() => {
+    return () => {
+      if (vrPendingTimerRef.current) clearTimeout(vrPendingTimerRef.current);
+    };
+  }, []);
 
   // In a plain browser, `e` toggles edit mode (the Tauri app uses a global shortcut).
   useEffect(() => {

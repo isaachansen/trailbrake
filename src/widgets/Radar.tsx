@@ -168,7 +168,7 @@ function Radar({ theme, config }: BaseWidgetProps<RadarConfig>) {
         const y = yOf(b.lon);
         const alongside = Math.abs(b.lon) < ALONGSIDE_M;
         roundRect(x - carW / 2, y - carH / 2, carW, carH, 3);
-        ctx.fillStyle = alongside ? t.loss : "#e7ebf2";
+        ctx.fillStyle = alongside ? t.loss : t.text;
         ctx.fill();
         ctx.strokeStyle = "rgba(0,0,0,0.35)";
         ctx.lineWidth = 1;
@@ -183,6 +183,22 @@ function Radar({ theme, config }: BaseWidgetProps<RadarConfig>) {
       roundRect(cx - carW / 2, cy - carH / 2, carW, carH, 3);
       ctx.fill();
 
+      // Orientation cue: a dim "ahead" marker at top so the layout (relative
+      // longitudinal offset, "up" = ahead) reads at a glance without a legend.
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.font = "700 8px system-ui, sans-serif";
+      ctx.fillStyle = "rgba(128,128,128,0.55)";
+      ctx.fillText("▲ AHEAD", cx, 3);
+
+      // Range tag: the configured half-range, so the scale is legible without
+      // opening settings.
+      ctx.textAlign = "right";
+      ctx.textBaseline = "bottom";
+      ctx.font = "600 8px system-ui, sans-serif";
+      ctx.fillStyle = "rgba(128,128,128,0.55)";
+      ctx.fillText(`${range} m`, w - 6, h - 4);
+
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
@@ -193,8 +209,8 @@ function Radar({ theme, config }: BaseWidgetProps<RadarConfig>) {
   }, [t.loss, t.accent]);
 
   return (
-    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: "7px 9px 9px", boxSizing: "border-box" }}>
-      <div style={{ marginBottom: 5 }}>
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: theme.widgetPad, boxSizing: "border-box" }}>
+      <div style={{ marginBottom: theme.space.sm }}>
         <WidgetTitle title="Radar" theme={theme} />
       </div>
       <div style={{ flex: 1, minHeight: 0, position: "relative", background: "rgba(255,255,255,0.03)", borderRadius: 12, overflow: "hidden" }}>

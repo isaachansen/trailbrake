@@ -19,6 +19,7 @@ export const previewStore = new TelemetryStore();
 // `startPreviewMock` just begins feeding them.
 const scenarioStores: Record<string, TelemetryStore> = {
   "rejoin-indicator": new TelemetryStore(),
+  "launch-assist": new TelemetryStore(),
 };
 
 /** The store a given widget's preview should read from — its scenario store if
@@ -179,11 +180,111 @@ function startRejoinScenario(target: TelemetryStore): () => void {
   };
 }
 
+/** Feed the launch-assist scenario: a standing start staged and repeated on an
+ * ~9s loop, so the preview mostly shows the ARMED (car stopped, full-opacity)
+ * state the widget is built around, with a brief MOVING dip so both states are
+ * visible. Phases (seconds into the loop):
+ *   0.0–5.0  staging   — stopped, clutch/throttle blipped up toward their
+ *                        targets while revving, as if finding the bite point.
+ *   5.0–6.0  held      — stopped, clutch/throttle settled on-target (green).
+ *   6.0–6.8  launch    — clutch dumped, throttle to the floor, speed climbs
+ *                        past the widget's 2 m/s stopped threshold.
+ *   6.8–8.5  driving   — brief acceleration away (MOVING, dimmed bars).
+ *   8.5–9.0  stopping  — braking back down to a stop for the next rep. */
+function startLaunchAssistScenario(target: TelemetryStore): () => void {
+  target.setCaps({ ...PREVIEW_CAPS });
+  const start = performance.now();
+  const PERIOD = 9;
+  let tick = 0;
+
+  const fastTimer = window.setInterval(() => {
+    const t = (performance.now() - start) / 1000;
+    const p = t % PERIOD;
+    tick += 1;
+
+    let speed: number;
+    let clutch: number;
+    let throttle: number;
+    let brake: number;
+    let rpm: number;
+    let gear: number;
+
+    if (p < 5.0) {
+      // Staging: blip the throttle and feel for the clutch bite while stopped.
+      const k = p / 5.0;
+      speed = 0;
+      clutch = Math.min(0.6, k * 0.7);
+      throttle = Math.max(0, 0.2 * Math.sin(p * TAU * 0.6)) * (0.3 + k);
+      brake = 0.3;
+      rpm = 1000 + 3200 * (0.3 + 0.7 * Math.abs(Math.sin(p * 0.9)));
+      gear = 1;
+    } else if (p < 6.0) {
+      // Held on the bite point, on-target for both channels (bars flash green).
+      speed = 0;
+      clutch = 0.6;
+      throttle = 0.5;
+      brake = 0;
+      rpm = 4200;
+      gear = 1;
+    } else if (p < 6.8) {
+      // Launch: dump the clutch, bury the throttle.
+      const k = (p - 6.0) / 0.8;
+      speed = 10 * k;
+      clutch = 0.6 * (1 - k);
+      throttle = 0.5 + 0.5 * k;
+      brake = 0;
+      rpm = 4200 + 3300 * k;
+      gear = 1;
+    } else if (p < 8.5) {
+      // Brief drive away — clearly moving, bars dimmed.
+      const k = (p - 6.8) / 1.7;
+      speed = 10 + 8 * k;
+      clutch = 0;
+      throttle = Math.max(0.3, 1 - 0.5 * k);
+      brake = 0;
+      rpm = 7500 - 2000 * k;
+      gear = k > 0.5 ? 2 : 1;
+    } else {
+      // Braking back down to a stop for the next rep.
+      const k = (p - 8.5) / 0.5;
+      speed = Math.max(0, 18 * (1 - k));
+      clutch = 0;
+      throttle = 0;
+      brake = 0.7;
+      rpm = Math.max(1000, 5500 * (1 - k));
+      gear = 1;
+    }
+
+    target.ingestFast({
+      ts: t,
+      tick,
+      readerHz: 30,
+      speedMs: speed,
+      rpm,
+      gear,
+      throttle,
+      brake,
+      clutch,
+      steeringRad: 0,
+      lapDistPct: 0,
+      currentLapS: t,
+      brakeBiasPct: 0.56,
+      absActive: false,
+      tcActive: false,
+      carLeft: null,
+      carRight: null,
+    } satisfies FastSample);
+  }, 1000 / 30);
+
+  return () => window.clearInterval(fastTimer);
+}
+
 /** Start feeding the preview store(s) with mock telemetry. Returns a stop function. */
 export function startPreviewMock(): () => void {
   const stops = [
     startBrowserMock(previewStore),
     startRejoinScenario(scenarioStores["rejoin-indicator"]),
+    startLaunchAssistScenario(scenarioStores["launch-assist"]),
   ];
   return () => stops.forEach((stop) => stop());
 }

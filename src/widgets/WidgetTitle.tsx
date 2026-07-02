@@ -19,11 +19,26 @@ export function WidgetTitle({ title, theme, right }: { title: string; theme: The
           fontWeight: 700,
           color: theme.colors.textDim,
           textTransform: "uppercase",
+          whiteSpace: "nowrap",
+          flexShrink: 0,
         }}
       >
         {title}
       </span>
-      {right != null && <div style={{ marginLeft: "auto", display: "flex", alignItems: "center" }}>{right}</div>}
+      {right != null && (
+        <div
+          style={{
+            marginLeft: "auto",
+            display: "flex",
+            alignItems: "center",
+            minWidth: 0,
+            flexShrink: 1,
+            overflow: "hidden",
+          }}
+        >
+          {right}
+        </div>
+      )}
     </div>
   );
 }

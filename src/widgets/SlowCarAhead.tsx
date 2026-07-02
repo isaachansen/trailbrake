@@ -3,14 +3,27 @@ import { useSlow } from "../store/hooks";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface SlowCarAheadConfig {
-  distanceThresholdM: number;
+  /** Only warn about cars within this time gap ahead (seconds). */
+  gapThresholdS: number;
   barThickness: number;
 }
 
 const defaultConfig: SlowCarAheadConfig = {
-  distanceThresholdM: 200,
+  gapThresholdS: 5,
   barThickness: 8,
 };
+
+/**
+ * Effective threshold in seconds, migrating layouts saved before the switch
+ * from a fabricated meters threshold (`distanceThresholdM`, assumed 42 m/s)
+ * to an honest time gap.
+ */
+function gapThresholdS(config: SlowCarAheadConfig): number {
+  if (typeof config.gapThresholdS === "number") return config.gapThresholdS;
+  const legacyM = (config as unknown as Record<string, unknown>).distanceThresholdM;
+  if (typeof legacyM === "number") return Math.round((legacyM / 42) * 2) / 2; // nearest 0.5 s
+  return defaultConfig.gapThresholdS;
+}
 
 /**
  * How long (ms) since the last observed motion before a car is considered
@@ -35,6 +48,7 @@ function SlowCarAhead({ theme, config }: BaseWidgetProps<SlowCarAheadConfig>) {
   const t = theme.colors;
   const slow = useSlow();
   const playerIdx = slow?.playerCarIdx ?? null;
+  const thresholdS = gapThresholdS(config);
 
   // Keyed by carIdx. Persists across renders via ref (never triggers re-render).
   const samples = useRef<Map<number, CarSample>>(new Map());
@@ -53,8 +67,7 @@ function SlowCarAhead({ theme, config }: BaseWidgetProps<SlowCarAheadConfig>) {
     const gap = c.gapToPlayerS;
     if (gap == null || gap <= 0) continue;
 
-    const distM = gap * 42;
-    if (distM > config.distanceThresholdM) continue;
+    if (gap > thresholdS) continue;
 
     seenIdxs.add(c.carIdx);
 
@@ -120,9 +133,9 @@ function SlowCarAhead({ theme, config }: BaseWidgetProps<SlowCarAheadConfig>) {
     );
   }
 
-  const distM = nearest.gap * 42;
-  const frac = Math.max(0, Math.min(1, 1 - distM / config.distanceThresholdM));
-  const color = nearest.onPitRoad ? t.gain : nearest.moving ? t.amber : t.loss;
+  const frac = Math.max(0, Math.min(1, 1 - nearest.gap / thresholdS));
+  // Pit-road cars are informational, not a hazard — neutral/dim, never green.
+  const color = nearest.onPitRoad ? t.textDim : nearest.moving ? t.amber : t.loss;
 
   // Bar thickness is configured in px but rendered in em (÷14 ≈ base font) so it
   // scales with the widget's effective font scale instead of staying fixed.
@@ -131,14 +144,18 @@ function SlowCarAhead({ theme, config }: BaseWidgetProps<SlowCarAheadConfig>) {
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", justifyContent: "center", gap: "0.5em", padding: "0 1.1em", boxSizing: "border-box", color: t.text }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "0.5em" }}>
-        <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.6em", letterSpacing: "0.12em", color: t.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>SLOW CAR AHEAD</span>
-        <span style={{ fontFamily: theme.font.mono, fontWeight: 700, fontSize: "1.4em", color, flexShrink: 0 }}>{Math.round(distM)}<span style={{ fontSize: "0.5em", color: t.textDim }}>m</span></span>
+        {/* This is an alert-class widget — when it's visible there's a hazard
+            in front of the driver, so the header must never read as subtle
+            chrome. Full text color (weight backed off slightly so it doesn't
+            outshine the gap number next to it). */}
+        <span style={{ fontFamily: theme.font.label, fontWeight: 600, fontSize: "0.6em", letterSpacing: "0.12em", color: t.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>SLOW CAR AHEAD</span>
+        <span style={{ fontFamily: theme.font.mono, fontWeight: 700, fontSize: "1.4em", color, flexShrink: 0 }}>{nearest.gap.toFixed(1)}<span style={{ fontSize: "0.5em", color: t.textDim }}>s</span></span>
       </div>
       <div style={{ height: `${barEm}em`, borderRadius: `${barEm / 2}em`, background: "rgba(255,255,255,0.07)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.10)", overflow: "hidden" }}>
         <div style={{ height: "100%", width: `${frac * 100}%`, background: color, borderRadius: `${barEm / 2}em`, transition: "width 0.15s linear" }} />
       </div>
       <div style={{ fontWeight: 500, fontSize: "0.72em", color: nearest.onPitRoad ? t.textDim : color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        {nearest.onPitRoad ? "off-track" : nearest.moving ? "on-track" : "stopped"} · {nearest.name}
+        {nearest.onPitRoad ? "IN PITS" : nearest.moving ? "ON TRACK" : "STOPPED"} · {nearest.name}
       </div>
     </div>
   );
@@ -153,7 +170,7 @@ export const slowCarAheadDef: WidgetDefinition<SlowCarAheadConfig> = {
   requiredPaths: ["slow"],
   requiredCapabilities: ["relativeGaps"],
   configSchema: [
-    { key: "distanceThresholdM", label: "Range (m)", type: "number", min: 50, max: 500, step: 10 },
+    { key: "gapThresholdS", label: "Range (s)", type: "number", min: 1, max: 12, step: 0.5 },
     { key: "barThickness", label: "Bar (px)", type: "number", min: 4, max: 20, step: 1 },
   ],
   Component: SlowCarAhead,

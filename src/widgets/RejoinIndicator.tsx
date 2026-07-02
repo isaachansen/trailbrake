@@ -99,7 +99,7 @@ function RejoinIndicator({ theme, config }: BaseWidgetProps<RejoinConfig>) {
         <div ref={labelRef} style={{ fontFamily: theme.font.label, fontWeight: 800, fontSize: "1.1em", letterSpacing: "0.08em", color: t.gain, opacity: 0, transition: "opacity 0.2s", lineHeight: 1 }}>CLEAR</div>
         <div style={{ display: "flex", alignItems: "baseline", gap: "0.4em" }}>
           <span ref={gapRef} style={{ fontFamily: theme.font.mono, fontWeight: 700, fontSize: "1.6em", color: t.text, lineHeight: 1 }}>--</span>
-          <span style={{ fontFamily: theme.font.label, fontSize: "0.6em", fontWeight: 600, letterSpacing: "0.1em", color: t.textDim2 }}>GAP BEHIND</span>
+          <span style={{ fontFamily: theme.font.label, fontSize: "0.6em", fontWeight: 600, letterSpacing: "0.1em", color: t.textDim }}>GAP BEHIND</span>
         </div>
       </div>
     </div>

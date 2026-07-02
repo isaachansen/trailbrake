@@ -12,12 +12,41 @@ export function ProfilesPage() {
   const profiles = layoutStore.listProfiles();
 
   const [newName, setNewName] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  const startCreate = () => {
+    const err = layoutStore.newProfile(newName);
+    if (err) {
+      setCreateError(err);
+      return; // keep the typed name so the user can fix it, not clear-on-fail
+    }
+    setCreateError(null);
+    setNewName("");
+  };
+
+  const startEdit = (name: string) => {
+    setEditing(name);
+    setDraft(name);
+    setRenameError(null);
+  };
 
   const commitRename = () => {
-    if (editing) layoutStore.renameProfile(editing, draft);
+    if (!editing) return;
+    const err = layoutStore.renameProfile(editing, draft);
+    if (err) {
+      setRenameError(err);
+      return; // leave the field open with its draft intact, not silently no-op
+    }
+    setRenameError(null);
     setEditing(null);
+  };
+
+  const cancelRename = () => {
+    setEditing(null);
+    setRenameError(null);
   };
 
   const carBindings = Object.entries(layout.carProfiles);
@@ -36,22 +65,32 @@ export function ProfilesPage() {
                 className={`radio-dot${active ? " on" : ""}`}
                 role="radio"
                 aria-checked={active}
+                tabIndex={0}
                 style={{ cursor: "pointer" }}
                 onClick={() => layoutStore.setActive(name)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    layoutStore.setActive(name);
+                  }
+                }}
               />
               <div className="lr-main">
                 {editing === name ? (
-                  <input
-                    className="input"
-                    autoFocus
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onBlur={commitRename}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") commitRename();
-                      if (e.key === "Escape") setEditing(null);
-                    }}
-                  />
+                  <>
+                    <input
+                      className="input"
+                      autoFocus
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitRename();
+                        if (e.key === "Escape") cancelRename();
+                      }}
+                    />
+                    {renameError && <div className="hint error">{renameError}</div>}
+                  </>
                 ) : (
                   <>
                     <div className="lr-name">
@@ -67,14 +106,7 @@ export function ProfilesPage() {
                     Use
                   </button>
                 )}
-                <button
-                  className="icon-btn"
-                  title="Rename"
-                  onClick={() => {
-                    setEditing(name);
-                    setDraft(name);
-                  }}
-                >
+                <button className="icon-btn" title="Rename" onClick={() => startEdit(name)}>
                   <Icon name="edit" />
                 </button>
                 <button
@@ -98,22 +130,15 @@ export function ProfilesPage() {
             style={{ flex: 1 }}
             placeholder="New profile name…"
             value={newName}
-            onChange={(e) => setNewName(e.target.value)}
+            onChange={(e) => {
+              setNewName(e.target.value);
+              if (createError) setCreateError(null);
+            }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && newName.trim()) {
-                layoutStore.newProfile(newName);
-                setNewName("");
-              }
+              if (e.key === "Enter" && newName.trim()) startCreate();
             }}
           />
-          <button
-            className="btn btn-primary"
-            disabled={!newName.trim()}
-            onClick={() => {
-              layoutStore.newProfile(newName);
-              setNewName("");
-            }}
-          >
+          <button className="btn btn-primary" disabled={!newName.trim()} onClick={startCreate}>
             <Icon name="plus" size={15} /> Create
           </button>
           <button
@@ -126,6 +151,7 @@ export function ProfilesPage() {
             Reset active
           </button>
         </div>
+        {createError && <div className="hint error" style={{ marginTop: 6 }}>{createError}</div>}
       </div>
 
       <div className="card">

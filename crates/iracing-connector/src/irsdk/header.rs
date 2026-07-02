@@ -42,19 +42,29 @@ pub struct Header {
 }
 
 impl Header {
-    /// Parse the header prefix. Returns `None` if the slice is too short.
+    /// Parse the header prefix. Returns `None` if the slice is too short **or
+    /// any sim-written length/offset is negative** — a negative value means a
+    /// torn header (sim starting up / crashing) or garbage from a foreign
+    /// process, and naively casting it to `usize` would sign-extend into an
+    /// enormous offset. Callers treat `None` as "not ready this poll".
     pub fn parse(region: &[u8]) -> Option<Self> {
         if region.len() < HEADER_LEN {
             return None;
         }
+        // Negative length/offset → torn/garbage header.
+        let nonneg = |off: usize| usize::try_from(i32_at(region, off)).ok();
+
+        let num_buf = nonneg(32)?.min(MAX_BUFS);
         let mut var_bufs = [VarBuf {
             tick_count: 0,
             buf_offset: 0,
         }; MAX_BUFS];
-        for (i, vb) in var_bufs.iter_mut().enumerate() {
+        for (i, vb) in var_bufs.iter_mut().enumerate().take(num_buf) {
+            // Entries beyond `num_buf` are unused by the sim and may hold
+            // garbage, so only the active ones are validated.
             let base = 48 + i * VAR_BUF_LEN;
             vb.tick_count = i32_at(region, base);
-            vb.buf_offset = i32_at(region, base + 4) as usize;
+            vb.buf_offset = usize::try_from(i32_at(region, base + 4)).ok()?;
         }
 
         Some(Header {
@@ -62,12 +72,12 @@ impl Header {
             status: i32_at(region, 4),
             tick_rate: i32_at(region, 8),
             session_info_update: i32_at(region, 12),
-            session_info_len: i32_at(region, 16).max(0) as usize,
-            session_info_offset: i32_at(region, 20).max(0) as usize,
-            num_vars: i32_at(region, 24).max(0) as usize,
-            var_header_offset: i32_at(region, 28).max(0) as usize,
-            num_buf: (i32_at(region, 32).max(0) as usize).min(MAX_BUFS),
-            buf_len: i32_at(region, 36).max(0) as usize,
+            session_info_len: nonneg(16)?,
+            session_info_offset: nonneg(20)?,
+            num_vars: nonneg(24)?,
+            var_header_offset: nonneg(28)?,
+            num_buf,
+            buf_len: nonneg(36)?,
             var_bufs,
         })
     }
@@ -78,6 +88,73 @@ impl Header {
             .iter()
             .max_by_key(|b| b.tick_count)
             .unwrap_or(&self.var_bufs[0])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a plausible 112-byte header region: connected, 1 buffer.
+    fn region() -> Vec<u8> {
+        let mut r = vec![0u8; HEADER_LEN];
+        let put = |r: &mut Vec<u8>, off: usize, v: i32| {
+            r[off..off + 4].copy_from_slice(&v.to_le_bytes());
+        };
+        put(&mut r, 0, 2); // ver
+        put(&mut r, 4, 1); // status: connected
+        put(&mut r, 8, 60); // tickRate
+        put(&mut r, 12, 7); // sessionInfoUpdate
+        put(&mut r, 16, 1024); // sessionInfoLen
+        put(&mut r, 20, 4096); // sessionInfoOffset
+        put(&mut r, 24, 300); // numVars
+        put(&mut r, 28, 144); // varHeaderOffset
+        put(&mut r, 32, 1); // numBuf
+        put(&mut r, 36, 6000); // bufLen
+        put(&mut r, 48, 12345); // varBuf[0].tickCount
+        put(&mut r, 52, 65536); // varBuf[0].bufOffset
+        r
+    }
+
+    #[test]
+    fn parses_a_well_formed_header() {
+        let h = Header::parse(&region()).expect("valid header");
+        assert_eq!(h.session_info_update, 7);
+        assert_eq!(h.num_vars, 300);
+        assert_eq!(h.buf_len, 6000);
+        assert_eq!(h.latest_buf().buf_offset, 65536);
+    }
+
+    #[test]
+    fn rejects_short_region() {
+        assert!(Header::parse(&region()[..HEADER_LEN - 1]).is_none());
+    }
+
+    #[test]
+    fn rejects_negative_lengths_and_offsets() {
+        // Each of the sim-written length/offset fields, poisoned in turn, must
+        // fail the parse instead of sign-extending to a huge usize.
+        for off in [16usize, 20, 24, 28, 32, 36] {
+            let mut r = region();
+            r[off..off + 4].copy_from_slice(&(-1i32).to_le_bytes());
+            assert!(Header::parse(&r).is_none(), "field at {off} accepted -1");
+        }
+    }
+
+    #[test]
+    fn rejects_negative_active_buf_offset() {
+        let mut r = region();
+        r[52..56].copy_from_slice(&(-4i32).to_le_bytes());
+        assert!(Header::parse(&r).is_none());
+    }
+
+    #[test]
+    fn ignores_garbage_in_inactive_buf_slots() {
+        // numBuf = 1, so slots 1..4 may legitimately hold junk.
+        let mut r = region();
+        r[64..68].copy_from_slice(&(-1i32).to_le_bytes()); // varBuf[1].tickCount
+        r[68..72].copy_from_slice(&(-1i32).to_le_bytes()); // varBuf[1].bufOffset
+        assert!(Header::parse(&r).is_some());
     }
 }
 

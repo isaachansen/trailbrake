@@ -73,8 +73,24 @@ pub struct IRacingConnector {
     messages: Vec<RaceControlMessage>,
     /// Per-sector timing state, derived from `LapDistPct` boundary crossings.
     sector_timer: SectorTimer,
+    /// Previous live `SessionNum`, for detecting the weekend advancing
+    /// (Practice→Qualy→Race) so per-session state can be reset.
+    prev_session_num: Option<i32>,
+    /// Previous `SessionUniqueID`, for detecting a switch to a different
+    /// server/event without an app restart.
+    prev_session_unique_id: Option<i32>,
+    /// `tickCount` of the last snapshot we emitted, so the no-event polling
+    /// fallback can skip frames the sim hasn't advanced (tick-count polling).
+    last_emitted_tick: Option<i64>,
     /// Whether the one-shot `OVERLAY_DUMP_VARS` diagnostic has already run.
     vars_dumped: bool,
+}
+
+/// `true` when a session-identity var changed between two polls. Only a
+/// `Some -> different Some` transition counts — a var briefly reading as absent
+/// (torn frame, sim warming up) must not trigger a spurious state reset.
+fn session_id_changed(prev: Option<i32>, cur: Option<i32>) -> bool {
+    matches!((prev, cur), (Some(a), Some(b)) if a != b)
 }
 
 /// Computes per-sector times from `LapDistPct` boundary crossings + `SessionTime`.
@@ -277,20 +293,21 @@ impl SectorTimer {
 fn fill_latest_buffer(map: &MappedFile, scratch: &mut Vec<u8>) -> Option<i64> {
     let mut last_tick = 0i32;
     for _ in 0..4 {
-        // SAFETY: header prefix is always present in the region.
-        let h = Header::parse(unsafe { map.slice(0, HEADER_LEN) })?;
+        let h = Header::parse(map.slice(0, HEADER_LEN)?)?;
         if h.buf_len == 0 {
             return None;
         }
         let vb = *h.latest_buf();
         last_tick = vb.tick_count;
 
-        // SAFETY: bounds come from the header the sim wrote.
-        let src = unsafe { map.slice(vb.buf_offset, h.buf_len) };
+        // Bounds come from the sim-written header; `slice` validates them
+        // against the mapped view, so a torn/garbage header fails the poll
+        // (not-ready) instead of reading out of the region.
+        let src = map.slice(vb.buf_offset, h.buf_len)?;
         scratch.clear();
         scratch.extend_from_slice(src);
 
-        let h2 = Header::parse(unsafe { map.slice(0, HEADER_LEN) })?;
+        let h2 = Header::parse(map.slice(0, HEADER_LEN)?)?;
         if h2.latest_buf().tick_count == vb.tick_count {
             return Some(vb.tick_count as i64);
         }
@@ -325,8 +342,23 @@ impl IRacingConnector {
             prev_flags: 0,
             messages: Vec::new(),
             sector_timer: SectorTimer::default(),
+            prev_session_num: None,
+            prev_session_unique_id: None,
+            last_emitted_tick: None,
             vars_dumped: false,
         }
+    }
+
+    /// Drop all per-session derived state. Called when the session changes
+    /// (weekend advance, different server, or a car/track swap) so nothing
+    /// leaks across: a phantom lap crossing would skew fuel-per-lap for up to
+    /// 20 laps, and Race Control would show the previous session's flags.
+    fn reset_session_state(&mut self) {
+        self.fuel_history.clear();
+        self.prev_lap = None;
+        self.prev_fuel = None;
+        self.prev_flags = 0;
+        self.messages.clear();
     }
 
     /// Compute fuel-per-lap from the history of `(lap, fuel_at_crossing)` pairs.
@@ -545,8 +577,13 @@ impl SimConnector for IRacingConnector {
     fn poll(&mut self) -> Option<TelemetrySnapshot> {
         let map = self.map.as_ref()?;
 
-        // Block on the sim's data-ready event rather than busy-polling.
-        match map.wait_for_data(WAIT_TIMEOUT_MS) {
+        // Block on the sim's data-ready event rather than busy-polling. When
+        // there's no event handle we fall back to sleep + header tick-count
+        // polling below, which must not re-emit a frame the sim hasn't
+        // actually advanced (audit B4) — ~200 Hz of identical frames would
+        // otherwise flood IPC/React.
+        let wait_result = map.wait_for_data(WAIT_TIMEOUT_MS);
+        match wait_result {
             WaitResult::Signaled => {}
             WaitResult::Timeout => return None,
             WaitResult::NoEvent => {
@@ -555,9 +592,12 @@ impl SimConnector for IRacingConnector {
             }
         }
 
-        // Re-borrow `map` immutably for the header read.
+        // Re-borrow `map` immutably for the header read. `slice` validates the
+        // requested range against the mapped view's actual size, so a torn or
+        // too-short header fails the poll (treated as not-ready) instead of
+        // reading out of bounds.
         let map = self.map.as_ref()?;
-        let header = Header::parse(unsafe { map.slice(0, HEADER_LEN) })?;
+        let header = Header::parse(map.slice(0, HEADER_LEN)?)?;
 
         // In the menus / between sessions the connected bit is clear.
         if header.status & STATUS_CONNECTED == 0 {
@@ -567,9 +607,16 @@ impl SimConnector for IRacingConnector {
         // Rebuild the var map + session info only when the session changes.
         let mut session_changed = false;
         if header.session_info_update != self.last_session_update {
-            let var_end = header.var_header_offset + header.num_vars * VAR_HEADER_LEN;
-            // SAFETY: bounds derived from the header the sim wrote.
-            let var_region = unsafe { map.slice(0, var_end) };
+            // Overflow-safe: `num_vars` is sim-controlled and, even though
+            // `Header::parse` rejects negative values, a huge positive count
+            // could still overflow the multiply. `checked_mul`/`checked_add`
+            // fail the poll instead of panicking or wrapping into a
+            // bounds-check that happens to pass.
+            let var_end = header
+                .num_vars
+                .checked_mul(VAR_HEADER_LEN)
+                .and_then(|sz| header.var_header_offset.checked_add(sz))?;
+            let var_region = map.slice(0, var_end)?;
             self.var_map = build_var_map(var_region, &header);
 
             // One-shot diagnostic: with OVERLAY_DUMP_VARS set, print every
@@ -584,9 +631,27 @@ impl SimConnector for IRacingConnector {
             }
 
             if header.session_info_len > 0 {
-                let raw = unsafe { map.slice(header.session_info_offset, header.session_info_len) };
+                let raw = map.slice(header.session_info_offset, header.session_info_len)?;
                 let yaml = decode_session_info(raw);
+                // Session-info rebuilds happen for lots of reasons (results
+                // updates, mid-session admin changes) — only a car/track
+                // change should reset per-session derived state (audit B3),
+                // so snapshot the player's identity before overwriting it.
+                let prev_track_id = self.session_min.track_id;
+                let prev_player_car = self
+                    .session_min
+                    .driver_car_idx
+                    .and_then(|pi| self.session_min.drivers.iter().find(|d| d.car_idx == pi))
+                    .and_then(|d| d.car_screen_name.clone());
                 self.session_min = parse_min(&yaml);
+                let new_player_car = self
+                    .session_min
+                    .driver_car_idx
+                    .and_then(|pi| self.session_min.drivers.iter().find(|d| d.car_idx == pi))
+                    .and_then(|d| d.car_screen_name.clone());
+                if self.session_min.track_id != prev_track_id || new_player_car != prev_player_car {
+                    self.reset_session_state();
+                }
             }
 
             self.last_session_update = header.session_info_update;
@@ -598,9 +663,52 @@ impl SimConnector for IRacingConnector {
         let map = self.map.as_ref()?;
         let sim_tick = fill_latest_buffer(map, &mut self.scratch)?;
 
+        // No-event fallback polling: if the sim hasn't advanced past the last
+        // frame we emitted, skip building/emitting a duplicate snapshot
+        // instead of re-sending it at the ~200 Hz sleep-loop rate (audit B4).
+        if wait_result == WaitResult::NoEvent && self.last_emitted_tick == Some(sim_tick) {
+            return None;
+        }
+
         // Build the normalized snapshot from the copied buffer.
         let vm = &self.var_map;
         let buf = &self.scratch;
+
+        // Live session identity: `SessionNum` selects which entry of
+        // `SessionInfo.Sessions[]` is active (audit B1 — the weekend advancing
+        // Practice→Qualy→Race must update the reported session type), and
+        // together with `SessionUniqueID` it also detects a switch to a
+        // different session/server so per-session state can be reset (audit
+        // B3). Only update the remembered value when the var actually reads —
+        // a var briefly absent (torn frame, sim warming up) must not look
+        // like a change once real data resumes.
+        let session_num = i32_var(vm, buf, "SessionNum");
+        let session_unique_id = i32_var(vm, buf, "SessionUniqueID");
+        let mut session_identity_changed = false;
+        if let Some(n) = session_num {
+            if session_id_changed(self.prev_session_num, Some(n)) {
+                session_identity_changed = true;
+            }
+            self.prev_session_num = Some(n);
+        }
+        if let Some(id) = session_unique_id {
+            if session_id_changed(self.prev_session_unique_id, Some(id)) {
+                session_identity_changed = true;
+            }
+            self.prev_session_unique_id = Some(id);
+        }
+        if session_identity_changed {
+            // Inlined (rather than `self.reset_session_state()`) so this only
+            // touches disjoint fields — `vm`/`buf` above hold an immutable
+            // borrow of `self.var_map`/`self.scratch` that's still live for
+            // the reads below, and a whole-`self` method call would conflict
+            // with that even though the touched fields don't overlap.
+            self.fuel_history.clear();
+            self.prev_lap = None;
+            self.prev_fuel = None;
+            self.prev_flags = 0;
+            self.messages.clear();
+        }
 
         // iRacing's `Clutch` is 1.0 when fully engaged (pedal up) and 0.0 when
         // pressed — the inverse of our "0 released, 1 applied" pedal convention.
@@ -803,10 +911,21 @@ impl SimConnector for IRacingConnector {
 
         let session = SessionState {
             track_name: self.session_min.track_name.clone(),
-            session_type: self.session_min.session_type.clone(),
+            // Selected by the live `SessionNum` var so the reported type
+            // tracks the weekend as it advances Practice→Qualy→Race (audit
+            // B1), instead of always reporting the first parsed session.
+            session_type: self.session_min.session_type_for(session_num),
             time_remaining_s: time_remaining(f64_var(vm, buf, "SessionTimeRemain")),
             laps_remaining: laps_remaining(i32_var(vm, buf, "SessionLapsRemainEx")),
-            total_cars: Some(self.session_min.drivers.len() as u32),
+            // Pace/safety car is filtered from `cars` above; count only real
+            // competitors here too, so the two stay consistent.
+            total_cars: Some(
+                self.session_min
+                    .drivers
+                    .iter()
+                    .filter(|d| !d.is_pace_car)
+                    .count() as u32,
+            ),
             flags_raw: Some(flags_raw),
             air_temp_c: f32_var(vm, buf, "AirTemp"),
             track_temp_c: f32_var(vm, buf, "TrackTemp"),
@@ -836,6 +955,10 @@ impl SimConnector for IRacingConnector {
             track_turns: self.session_min.track_id.and_then(track_map::turns_for),
             track_metadata: self.session_min.track_id.and_then(track_map::metadata_for),
         };
+
+        // Remember what we just emitted so the no-event fallback poll (above)
+        // can recognize a repeat of this same buffer next time and skip it.
+        self.last_emitted_tick = Some(sim_tick);
 
         Some(TelemetrySnapshot {
             meta: Meta {
@@ -1042,5 +1165,71 @@ mod tests {
         assert_eq!(map(1), Some(0.0)); // dry
         assert_eq!(map(7), Some(1.0)); // extremely wet
         assert!((map(4).unwrap() - 0.5).abs() < 1e-6);
+    }
+
+    /// Audit B3: only a `Some -> different Some` transition counts as a real
+    /// session-identity change. A value briefly absent (torn frame, sim
+    /// warming up) or unchanged must not look like a switch.
+    #[test]
+    fn session_id_changed_only_fires_on_real_transition() {
+        assert!(!session_id_changed(None, Some(1)), "no prior value yet");
+        assert!(!session_id_changed(Some(1), None), "value briefly absent");
+        assert!(!session_id_changed(Some(1), Some(1)), "unchanged");
+        assert!(session_id_changed(Some(1), Some(2)), "real transition");
+    }
+
+    /// Audit "pace car counted in total_cars": the field-count total must use
+    /// the same `!is_pace_car` filter as the `cars` list, so the two numbers
+    /// agree (a Standings widget comparing them shouldn't see an off-by-one).
+    #[test]
+    fn total_cars_excludes_pace_car() {
+        use crate::session::DriverEntry;
+        let drivers = vec![
+            DriverEntry {
+                car_idx: 0,
+                is_pace_car: true,
+                ..Default::default()
+            },
+            DriverEntry {
+                car_idx: 1,
+                is_pace_car: false,
+                ..Default::default()
+            },
+            DriverEntry {
+                car_idx: 2,
+                is_pace_car: false,
+                ..Default::default()
+            },
+        ];
+        let total_cars = drivers.iter().filter(|d| !d.is_pace_car).count() as u32;
+        let cars_list_len = drivers.iter().filter(|d| !d.is_pace_car).count() as u32;
+        assert_eq!(total_cars, 2, "pace car must not be counted");
+        assert_eq!(total_cars, cars_list_len, "must match the `cars` list filter");
+    }
+
+    /// Audit B3: a session change must drop fuel history, lap/fuel/flag
+    /// tracking, and accumulated race-control messages so nothing leaks into
+    /// the next car/track without an app restart.
+    #[test]
+    fn reset_session_state_clears_per_session_fields() {
+        let mut c = IRacingConnector::new();
+        c.fuel_history.push((1, 50.0));
+        c.prev_lap = Some(3);
+        c.prev_fuel = Some(45.0);
+        c.prev_flags = ir_flags::YELLOW;
+        c.messages.push(RaceControlMessage {
+            time_s: None,
+            kind: "flag".to_string(),
+            text: "Yellow flag — caution".to_string(),
+            priority: 20,
+        });
+
+        c.reset_session_state();
+
+        assert!(c.fuel_history.is_empty());
+        assert_eq!(c.prev_lap, None);
+        assert_eq!(c.prev_fuel, None);
+        assert_eq!(c.prev_flags, 0);
+        assert!(c.messages.is_empty());
     }
 }

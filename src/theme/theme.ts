@@ -67,7 +67,12 @@ const PINK = "#ff2d8e";
 
 export const defaultTheme: Theme = {
   colors: {
-    surface: "rgba(18, 20, 27, 0.55)",
+    // Raised from 0.55 (was collapsing textDim/textDim2/cell/gridLine over bright
+    // backdrops — audit T1). Paired with the brightness() term in `panelBlur` below,
+    // self-painted panels (Flag/Spotter/TelemetryInspector, which use this token
+    // directly) now land close to the near-solid look WidgetHost's default opacity
+    // (1) already gives host-painted panels, instead of washing out independently.
+    surface: "rgba(18, 20, 27, 0.78)",
     surfaceBorder: "rgba(255, 255, 255, 0.10)",
     cell: "rgba(255, 255, 255, 0.04)",
     playerRow: "rgba(255, 45, 142, 0.16)",
@@ -97,7 +102,13 @@ export const defaultTheme: Theme = {
     sizeBase: 14,
   },
   radius: 16,
-  panelBlur: "blur(20px) saturate(1.25)",
+  // `brightness(0.55)` darkens whatever backdrop shows through the glass BEFORE
+  // it's blended with `surface`/`cell` colors — this is what actually keeps the
+  // floor dark at any panel-opacity setting (opacity only matters once it's < 1;
+  // at the default of 1 the panel is fully opaque and this term is a no-op). Fixes
+  // audit T1: over bright game footage the old blur+saturate alone let the panel
+  // read mid-gray and collapsed textDim/textDim2/cell/gridLine contrast.
+  panelBlur: "blur(20px) saturate(1.25) brightness(0.55)",
   panelShadow: "0 18px 50px rgba(0, 0, 0, 0.5)",
   space: { xs: 4, sm: 6, md: 8, lg: 12, xl: 16 },
   widgetPad: "8px 12px",

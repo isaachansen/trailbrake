@@ -98,6 +98,11 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
     // frame so the field glides instead of jumping on every slow update.
     const animPct = new Map<number, number>();
     let lastT = 0;
+    // classColorMap() allocates a Map every call — cache it and only recompute
+    // when the slow sample actually changes (a handful of Hz), not every rAF
+    // frame (60Hz), since store.getSlow() returns a fresh reference each tick.
+    let lastSlow: SlowSample | null = null;
+    let cmap = new Map<number, string>();
 
     const draw = (now: number) => {
       const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0;
@@ -110,6 +115,10 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
       ctx.clearRect(0, 0, w, h);
 
       const slow = store.getSlow();
+      if (slow !== lastSlow) {
+        lastSlow = slow;
+        cmap = classColorMap(slow?.cars ?? []);
+      }
       const path = slow?.trackPath ?? null;
       if (nameRef.current) setText(nameRef.current, (slow?.trackName ?? "").toUpperCase());
       if (!path || path.length < 3) {
@@ -156,7 +165,9 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
         ctx.strokeStyle = color;
         ctx.stroke();
       };
-      stroke(8, "rgba(255,255,255,0.10)");
+      // Dark under-stroke (rather than a faint white one) so the bright core
+      // line pops against any backdrop, including light footage.
+      stroke(8, "rgba(0,0,0,0.4)");
       stroke(3.4, "rgba(255,255,255,0.5)");
 
       // Start/finish tick.
@@ -165,15 +176,21 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
       ctx.fillRect(MX(sf) - 1.5, MY(sf) - 5, 3, 10);
 
       // Corner labels (positioned just off the track in the same 0..1 space).
-      if (config.showTurns) {
+      // Skipped entirely below ~240px wide (too little room for legible digits)
+      // and, per-label, whenever its projected position lands within ~12px of
+      // an already-drawn label (tight chicanes otherwise merge into "87").
+      if (config.showTurns && w >= 240) {
         const turns = slow?.trackTurns ?? null;
         if (turns) {
           ctx.font = "600 9px system-ui, sans-serif";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
+          const drawn: [number, number][] = [];
           for (const tn of turns) {
             const x = MX([tn.x, tn.y]);
             const y = MY([tn.x, tn.y]);
+            if (drawn.some(([dx, dy]) => Math.hypot(x - dx, y - dy) < 12)) continue;
+            drawn.push([x, y]);
             ctx.lineWidth = 3;
             ctx.strokeStyle = "rgba(0,0,0,0.55)";
             ctx.strokeText(tn.label, x, y);
@@ -213,7 +230,6 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
       };
 
       const playerIdx = slow?.playerCarIdx ?? null;
-      const cmap = classColorMap(slow?.cars ?? []);
       // In qualifying you run a solo hot lap — drop the field so only your own dot
       // shows (the player dot is drawn separately, below).
       const soloQualy = config.soloInQualy && classifySessionType(slow?.sessionType) === "qualy";
@@ -244,8 +260,10 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
 
       // Player dot rides the fast-path lap distance for smoothness — larger,
       // accent-colored, with a glow and dark ring so the user finds it instantly.
+      // Garaged (lapDistPct < 0, real iRacing reports -1) hides it, same as the
+      // rest of the field above — otherwise it pins to the start/finish line.
       const pPct = store.latestFast?.lapDistPct ?? findPlayerPct(slow, playerIdx);
-      if (pPct != null)
+      if (pPct != null && pPct >= 0)
         dot(posAt(g, pPct), 5.5, t.accent, {
           glow: "rgba(255,45,142,0.4)",
           outline: "rgba(8,11,18,0.92)",
@@ -262,8 +280,8 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
   }, [t.accent]);
 
   return (
-    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: "8px 11px 11px", boxSizing: "border-box" }}>
-      <div style={{ marginBottom: 6 }}>
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: theme.widgetPad, boxSizing: "border-box" }}>
+      <div style={{ marginBottom: theme.space.sm }}>
         <WidgetTitle
           title="Track Map"
           theme={theme}

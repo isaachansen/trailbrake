@@ -70,6 +70,8 @@ export type ConfigField =
   | { key: string; label: string; type: "boolean" }
   | { key: string; label: string; type: "number"; min: number; max: number; step: number }
   | { key: string; label: string; type: "enum"; options: { value: string; label: string }[] }
+  /** Free-form text (e.g. an external session/account id). Stored value is the string. */
+  | { key: string; label: string; type: "text"; placeholder?: string }
   /**
    * A color value (`#rrggbb`). The settings panel shows the `presets` as
    * swatches plus a custom color picker. Stored value is the hex string.

@@ -40,14 +40,40 @@ impl SimConnector for ReplayConnector {
     fn connect(&mut self) -> Result<(), ConnectError> {
         let text = std::fs::read_to_string(&self.path)
             .map_err(|e| ConnectError::Os(format!("replay open {:?}: {e}", self.path)))?;
-        self.frames = text
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .filter_map(|l| serde_json::from_str::<TelemetrySnapshot>(l).ok())
-            .collect();
-        if self.frames.is_empty() {
+        let mut frames = Vec::new();
+        let mut bad = 0usize;
+        let mut first_err: Option<(usize, String)> = None;
+        for (i, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<TelemetrySnapshot>(line) {
+                Ok(snap) => frames.push(snap),
+                Err(e) => {
+                    bad += 1;
+                    first_err.get_or_insert((i + 1, e.to_string()));
+                }
+            }
+        }
+        if bad > 0 {
+            // Don't swallow a broken fixture: say what was skipped and where.
+            let (line, err) = first_err.as_ref().expect("bad > 0 implies a first error");
+            eprintln!(
+                "replay {:?}: skipped {bad} malformed line(s); first at line {line}: {err}",
+                self.path
+            );
+        }
+        if frames.is_empty() {
+            // An all-malformed file is a broken fixture, not "sim not running".
+            if let Some((line, err)) = first_err {
+                return Err(ConnectError::Os(format!(
+                    "replay {:?}: all {bad} line(s) malformed; first at line {line}: {err}",
+                    self.path
+                )));
+            }
             return Err(ConnectError::NotRunning);
         }
+        self.frames = frames;
         self.idx = 0;
         self.last_ts = None;
         self.connected = true;

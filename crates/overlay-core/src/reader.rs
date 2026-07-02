@@ -6,7 +6,7 @@
 //! later) render at their own capped rate — reading is decoupled from rendering.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, TrySendError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -24,8 +24,9 @@ pub struct ReaderHandle {
 }
 
 impl ReaderHandle {
-    /// The stream of normalized snapshots. For Phase 1 this is unbounded; the
-    /// shared-memory/IPC bridge in later phases adds per-widget throttling.
+    /// The stream of normalized snapshots. Bounded (see [`CHANNEL_BOUND`]):
+    /// when the consumer stalls, fresh frames are dropped instead of queued, so
+    /// a hung webview never grows memory or replays a backlog of stale frames.
     pub fn snapshots(&self) -> &Receiver<TelemetrySnapshot> {
         &self.rx
     }
@@ -45,6 +46,11 @@ impl Drop for ReaderHandle {
     }
 }
 
+/// Max snapshots buffered between the reader and its consumer. Small on
+/// purpose: at 60 Hz this is ~33 ms of lag worst-case; anything the consumer
+/// can't keep up with is dropped (latest-wins) rather than queued.
+const CHANNEL_BOUND: usize = 2;
+
 /// Spawn a reader thread driving `connector`.
 ///
 /// The thread:
@@ -56,7 +62,7 @@ pub fn spawn_reader<C>(mut connector: C) -> ReaderHandle
 where
     C: SimConnector + 'static,
 {
-    let (tx, rx) = mpsc::channel::<TelemetrySnapshot>();
+    let (tx, rx) = mpsc::sync_channel::<TelemetrySnapshot>(CHANNEL_BOUND);
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = Arc::clone(&stop);
 
@@ -87,9 +93,13 @@ where
                         tick = tick.wrapping_add(1);
                         snap.meta.tick = tick;
                         snap.meta.frame_timestamp_s = started.elapsed().as_secs_f64();
-                        // If the consumer has hung up, the reader is done.
-                        if tx.send(snap).is_err() {
-                            break;
+                        match tx.try_send(snap) {
+                            Ok(()) => {}
+                            // Consumer is behind: drop this frame rather than
+                            // queue it (it would only arrive stale anyway).
+                            Err(TrySendError::Full(_)) => {}
+                            // The consumer has hung up; the reader is done.
+                            Err(TrySendError::Disconnected(_)) => break,
                         }
                     }
                     None => {

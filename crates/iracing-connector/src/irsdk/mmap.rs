@@ -21,7 +21,8 @@ use std::os::windows::ffi::OsStrExt;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Memory::{
-    MapViewOfFile, OpenFileMappingW, UnmapViewOfFile, FILE_MAP_READ, MEMORY_MAPPED_VIEW_ADDRESS,
+    MapViewOfFile, OpenFileMappingW, UnmapViewOfFile, VirtualQuery, FILE_MAP_READ,
+    MEMORY_BASIC_INFORMATION, MEMORY_MAPPED_VIEW_ADDRESS,
 };
 use windows::Win32::System::Threading::{
     OpenEventW, WaitForSingleObject, SYNCHRONIZATION_ACCESS_RIGHTS,
@@ -50,6 +51,19 @@ pub struct MappedFile {
     mapping: HANDLE,
     event: Option<HANDLE>,
     base: *const u8,
+    /// Size of the mapped view in bytes, measured at map time (`VirtualQuery`).
+    /// Every slice into the region is bounds-checked against this, because all
+    /// offsets/lengths come from a header *the sim writes* — a torn header (or a
+    /// hostile process squatting the unsecured section name) must never be able
+    /// to make us read outside the view.
+    len: usize,
+}
+
+/// `true` when `off..off+len` lies inside a region of `total` bytes, with
+/// overflow-safe arithmetic. Factored out of [`MappedFile::slice`] so the
+/// bounds logic is unit-testable without a live mapping.
+fn in_bounds(off: usize, len: usize, total: usize) -> bool {
+    off.checked_add(len).is_some_and(|end| end <= total)
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -79,6 +93,22 @@ impl MappedFile {
                 return Err(ConnectError::Os("MapViewOfFile returned null".into()));
             }
 
+            // Measure the actual size of the mapped view so slices can be
+            // bounds-checked. Mapping with length 0 maps the whole section, but
+            // nothing reports its size back — `VirtualQuery` on the view base
+            // does (`RegionSize` = committed bytes from the base).
+            let mut mbi = MEMORY_BASIC_INFORMATION::default();
+            let queried = VirtualQuery(
+                Some(view.Value as *const _),
+                &mut mbi,
+                std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+            );
+            if queried == 0 || mbi.RegionSize == 0 {
+                let _ = UnmapViewOfFile(view);
+                let _ = CloseHandle(mapping);
+                return Err(ConnectError::Os("VirtualQuery on mapped view failed".into()));
+            }
+
             // The data-ready event is best-effort.
             let event = OpenEventW(
                 SYNCHRONIZATION_ACCESS_RIGHTS(SYNCHRONIZE),
@@ -91,6 +121,7 @@ impl MappedFile {
                 mapping,
                 event,
                 base: view.Value as *const u8,
+                len: mbi.RegionSize,
             })
         }
     }
@@ -121,13 +152,44 @@ impl MappedFile {
         }
     }
 
-    /// Borrow `len` bytes starting at `off` within the mapped region.
-    ///
-    /// # Safety
-    /// `off + len` must lie within the region the sim allocated. Callers derive
-    /// these bounds from the header the sim itself wrote, so in practice they do.
-    pub unsafe fn slice(&self, off: usize, len: usize) -> &[u8] {
-        std::slice::from_raw_parts(self.base.add(off), len)
+    /// Borrow `len` bytes starting at `off` within the mapped region, or `None`
+    /// when the range falls outside the mapped view. Offsets/lengths come from
+    /// the sim-written header, which can be torn (or hostile), so they are
+    /// validated here rather than trusted.
+    pub fn slice(&self, off: usize, len: usize) -> Option<&[u8]> {
+        if !in_bounds(off, len, self.len) {
+            return None;
+        }
+        // SAFETY: `off + len <= self.len` (checked above, overflow-safe), and
+        // `base..base+len` stays mapped for the lifetime of `self`.
+        Some(unsafe { std::slice::from_raw_parts(self.base.add(off), len) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::in_bounds;
+
+    #[test]
+    fn in_bounds_accepts_ranges_inside_the_region() {
+        assert!(in_bounds(0, 0, 0));
+        assert!(in_bounds(0, 112, 112));
+        assert!(in_bounds(100, 12, 112));
+    }
+
+    #[test]
+    fn in_bounds_rejects_ranges_past_the_end() {
+        assert!(!in_bounds(0, 113, 112));
+        assert!(!in_bounds(112, 1, 112));
+        assert!(!in_bounds(1_000_000, 4, 112));
+    }
+
+    #[test]
+    fn in_bounds_rejects_overflowing_ranges() {
+        // A negative i32 offset naively cast to usize sign-extends to ~1.8e19;
+        // `off + len` must not wrap around and look valid.
+        assert!(!in_bounds(usize::MAX, 4, 112));
+        assert!(!in_bounds(usize::MAX - 1, usize::MAX, 112));
     }
 }
 

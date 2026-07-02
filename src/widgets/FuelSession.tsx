@@ -64,7 +64,7 @@ function FuelSession({ theme, config }: BaseWidgetProps<FuelSessionConfig>) {
   const marginDisp = fuelValue(marginL, units);
 
   const cell = (label: string, value: React.ReactNode, color: string) => (
-    <div style={{ flex: 1, minWidth: 0, textAlign: "center", padding: "6px 2px", background: t.cell, borderRadius: 9, display: "flex", flexDirection: "column", justifyContent: "center", gap: 3 }}>
+    <div style={{ flex: 1, minWidth: 0, textAlign: "center", padding: "7px 4px", background: t.cell, borderRadius: 9, display: "flex", flexDirection: "column", justifyContent: "center", gap: 4 }}>
       <div style={{ fontFamily: theme.font.label, fontSize: "0.58em", fontWeight: 600, letterSpacing: "0.12em", color: t.textDim2 }}>{label}</div>
       <div style={{ fontFamily: mono, fontWeight: 700, fontSize: "1.05em", lineHeight: 1, color }}>{value}</div>
     </div>
@@ -77,7 +77,7 @@ function FuelSession({ theme, config }: BaseWidgetProps<FuelSessionConfig>) {
   );
 
   return (
-    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", gap: theme.space.md, color: t.text, padding: "8px 12px 10px", boxSizing: "border-box", overflow: "hidden" }}>
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", gap: theme.space.md, color: t.text, padding: theme.widgetPad, boxSizing: "border-box", overflow: "hidden" }}>
       <div style={{ flex: "0 0 auto" }}>
         <WidgetTitle title="Fuel & Session" theme={theme} />
       </div>
@@ -97,14 +97,14 @@ function FuelSession({ theme, config }: BaseWidgetProps<FuelSessionConfig>) {
             {fuelDisp != null ? fuelDisp.toFixed(1) : "--"} <span style={{ fontSize: "0.68em", color: t.textDim }}>{fLabel}</span>
           </span>
         </div>
-        <div style={{ marginTop: 7, height: "0.65em", borderRadius: 5, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+        <div style={{ marginTop: 9, height: "0.65em", borderRadius: 5, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
           <div style={{ height: "100%", width: `${barPct}%`, background: `linear-gradient(90deg, ${t.amber}, #ffd98a)`, borderRadius: 5, transition: "width 0.4s linear" }} />
         </div>
       </div>
 
       {config.showStrategy && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: theme.space.sm, flex: "1 1 0", minHeight: 0 }}>
-          {cell("PER LAP", perLapDisp != null ? big(perLapDisp.toFixed(2), fLabel) : "--", t.text)}
+          {cell("PER LAP", perLapDisp != null ? big(perLapDisp.toFixed(2), ` ${fLabel}`) : "--", t.text)}
           {cell(
             "LAPS LEFT",
             lapsLeftInTank != null ? String(lapsLeftInTank) : "--",
@@ -114,7 +114,7 @@ function FuelSession({ theme, config }: BaseWidgetProps<FuelSessionConfig>) {
           )}
           {cell(
             "TO FIN",
-            marginDisp != null ? big(`${marginDisp >= 0 ? "+" : ""}${marginDisp.toFixed(1)}`, fLabel) : "--",
+            marginDisp != null ? big(`${marginDisp >= 0 ? "+" : ""}${marginDisp.toFixed(1)}`, ` ${fLabel}`) : "--",
             marginDisp == null ? t.text : marginDisp >= 0 ? t.gain : t.loss
           )}
         </div>

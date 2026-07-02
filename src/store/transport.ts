@@ -65,7 +65,20 @@ export async function initTransport(): Promise<() => void> {
   if (refCount === 1) {
     startPromise = start();
   }
-  await startPromise;
+  try {
+    await startPromise;
+  } catch (err) {
+    // Undo this call's refcount and, once nothing else is waiting on the same
+    // failed attempt, clear the memoized promise so a later initTransport()
+    // call starts fresh instead of awaiting (and rethrowing) the same
+    // rejection forever.
+    refCount -= 1;
+    if (refCount === 0) {
+      startPromise = null;
+      activeCleanup = null;
+    }
+    throw err;
+  }
 
   let released = false;
   return () => {

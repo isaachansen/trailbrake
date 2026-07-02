@@ -4,6 +4,7 @@
 // to representative entries when no live messages exist yet.
 
 import { useSlow } from "../store/hooks";
+import { useScreenLayer } from "../components/screenLayer";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface RaceControlConfig {
@@ -64,25 +65,40 @@ function deriveStatusChip(flagsRaw: number | null): { label: string; color: stri
   return null;
 }
 
-// Representative feed for when no live messages exist (e.g. mock without messages).
+// Representative feed for preview/mock, oldest first (matches the live-message
+// ordering) so bottom-anchoring shows the "latest" entry at the bottom just
+// like it would with real messages. Never shown on a live overlay where race
+// control is simply not connected — see `isPreviewOrMock` below.
 const DEMO: Msg[] = [
-  { time: "--:--", tag: "INFO", text: "Waiting for race control messages…" },
+  { time: "18:32", tag: "GREEN", text: "Green flag — racing" },
+  { time: "14:07", tag: "YEL", text: "Caution: incident at Turn 4" },
+  { time: "9:51", tag: "INFO", text: "Fastest lap: #92 — 1:45.51" },
+  { time: "3:20", tag: "PEN", text: "Car #17 — drive-through penalty, contact" },
 ];
 
 function RaceControl({ theme, config }: BaseWidgetProps<RaceControlConfig>) {
   const t = theme.colors;
   const slow = useSlow();
+  const { preview } = useScreenLayer();
 
+  // Keep chronological order (oldest first, newest last) so the feed flows
+  // top→bottom like real chat; the list is bottom-anchored below.
   const liveMessages: Msg[] = (slow?.messages ?? [])
     .slice(-config.maxRows)
-    .reverse()
     .map((m) => ({
       time: fmtTime(m.timeS ?? null),
       tag: kindToTag(m.kind),
       text: m.text,
     }));
 
-  const messages = liveMessages.length > 0 ? liveMessages : DEMO;
+  // Show DEMO entries only in the manager preview or the mock sim — never on a
+  // live overlay where race control is simply not connected.
+  const isPreviewOrMock = preview || slow?.sim === "mock";
+  const messages = liveMessages.length > 0
+    ? liveMessages
+    : isPreviewOrMock
+      ? DEMO.slice(-config.maxRows)
+      : [];
   const chip = deriveStatusChip(slow?.flagsRaw ?? null);
 
   const tagStyle: Record<Tag, { color: string; chip: string; chipText: string }> = {
@@ -97,26 +113,32 @@ function RaceControl({ theme, config }: BaseWidgetProps<RaceControlConfig>) {
   };
 
   return (
-    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: "8px 0 10px", boxSizing: "border-box", overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 14px 8px" }}>
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: theme.widgetPad, boxSizing: "border-box", overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: theme.space.sm }}>
         <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.82em", letterSpacing: "0.1em" }}>RACE CONTROL</span>
         {chip && (
           <span style={{ fontFamily: theme.font.label, marginLeft: "auto", fontWeight: 700, fontSize: "0.6em", letterSpacing: "0.1em", color: "#0a0b0e", background: chip.color, padding: "1px 9px", borderRadius: 5 }}>{chip.label}</span>
         )}
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflow: "hidden", padding: "0 12px", display: "flex", flexDirection: "column", gap: 5 }}>
-        {messages.slice(0, config.maxRows).map((m, i) => {
-          const ts = tagStyle[m.tag];
-          const info = m.tag === "INFO";
-          return (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 9px", background: info ? t.cell : `${ts.color}1a`, borderRadius: 8, borderLeft: `3px solid ${ts.color}` }}>
-              <span style={{ fontFamily: theme.font.mono, fontWeight: 500, fontSize: "0.58em", color: t.textDim2, flex: "0 0 auto", whiteSpace: "nowrap" }}>{m.time}</span>
-              <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.52em", letterSpacing: "0.06em", color: info ? t.textDim : ts.chipText, background: ts.chip, padding: info ? 0 : "1px 6px", borderRadius: 4, minWidth: "2.6em", textAlign: "center" }}>{m.tag}</span>
-              <span style={{ fontWeight: 500, fontSize: "0.72em", color: info ? t.textDim : t.text, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.text}</span>
-            </div>
-          );
-        })}
-      </div>
+      {messages.length === 0 ? (
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <span style={{ fontFamily: theme.font.label, fontSize: "0.72em", color: t.textDim2, letterSpacing: "0.04em" }}>Waiting for race control…</span>
+        </div>
+      ) : (
+        <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", justifyContent: "flex-end", gap: 5 }}>
+          {messages.map((m, i) => {
+            const ts = tagStyle[m.tag];
+            const info = m.tag === "INFO";
+            return (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 9px", background: info ? t.cell : `${ts.color}1a`, borderRadius: 8, borderLeft: `3px solid ${ts.color}` }}>
+                <span style={{ fontFamily: theme.font.mono, fontWeight: 500, fontSize: "0.58em", color: t.textDim2, flex: "0 0 auto", whiteSpace: "nowrap" }}>{m.time}</span>
+                <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.52em", letterSpacing: "0.06em", color: info ? t.textDim : ts.chipText, background: ts.chip, padding: info ? 0 : "1px 6px", borderRadius: 4, minWidth: "2.6em", textAlign: "center" }}>{m.tag}</span>
+                <span style={{ fontWeight: 500, fontSize: "0.72em", color: info ? t.textDim : t.text, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.text}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -44,7 +44,10 @@ function SectorDelta({ theme, config }: BaseWidgetProps<SectorDeltaConfig>) {
 
     return (
       <div key={key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{ fontFamily: theme.font.label, width: "1.9em", textAlign: "center", padding: "3px 0", background: t.cell, borderRadius: 7, fontWeight: 700, fontSize: "0.72em", color: t.textDim, letterSpacing: "0.06em" }}>
+        {/* A subtle border (HighlightedDriver's cell pattern) — the cell fill
+            alone (t.cell, 4% white) is too close to the panel color to read
+            as a distinct chip even under the brightened theme. */}
+        <div style={{ fontFamily: theme.font.label, width: "1.9em", textAlign: "center", padding: "3px 0", background: t.cell, border: `1px solid ${t.surfaceBorder}`, borderRadius: 7, boxSizing: "border-box", fontWeight: 700, fontSize: "0.72em", color: t.textDim, letterSpacing: "0.06em" }}>
           S{idx + 1}
         </div>
         <span style={{ fontFamily: mono, fontWeight: 700, fontSize: "1.05em", color, width: "3.6em", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
@@ -72,11 +75,11 @@ function SectorDelta({ theme, config }: BaseWidgetProps<SectorDeltaConfig>) {
   };
 
   return (
-    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: "9px 12px 11px", boxSizing: "border-box", overflow: "hidden", gap: 8 }}>
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: theme.widgetPad, boxSizing: "border-box", overflow: "hidden", gap: theme.space.md }}>
       <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center" }}>
         <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.78em", letterSpacing: "0.1em" }}>SECTOR DELTA</span>
       </div>
-      <div style={{ flex: "1 1 auto", display: "flex", flexDirection: "column", justifyContent: "center", gap: 9, minHeight: 0 }}>
+      <div style={{ flex: "1 1 auto", display: "flex", flexDirection: "column", justifyContent: "center", gap: theme.space.md, minHeight: 0 }}>
         {SECTOR_KEYS.map((_, i) => row(i))}
       </div>
     </div>

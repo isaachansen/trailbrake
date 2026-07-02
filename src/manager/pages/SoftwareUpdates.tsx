@@ -2,7 +2,7 @@
 // a newer version is published, downloads + installs it in place and relaunches.
 // All the moving parts live in store/updater.ts; this is just the UI around them.
 
-import { useState } from "react";
+import { useSyncExternalStore } from "react";
 import { Field } from "../ui";
 import { isTauri } from "../../store/transport";
 import {
@@ -15,11 +15,60 @@ import {
 
 type Phase = "idle" | "checking" | "available" | "downloading" | "uptodate" | "error";
 
+interface UpdateFlowState {
+  phase: Phase;
+  info: UpdateInfo | null;
+  progress: DownloadProgress | null;
+  error: string;
+}
+
+// Hoisted to module scope (not component state): the Settings page can be
+// navigated away from and back to mid-check/mid-download, and this is the
+// single source of truth so that doesn't look like the flow silently reset.
+// It also means a second `check()`/`install()` can't stomp on one already in
+// flight — callers below check `state.phase` before starting either.
+const updateFlow: UpdateFlowState = { phase: "idle", info: null, progress: null, error: "" };
+const listeners = new Set<() => void>();
+
+function setUpdateFlow(patch: Partial<UpdateFlowState>) {
+  Object.assign(updateFlow, patch);
+  listeners.forEach((l) => l());
+}
+
+function subscribe(l: () => void): () => void {
+  listeners.add(l);
+  return () => listeners.delete(l);
+}
+
+function getSnapshot(): UpdateFlowState {
+  return updateFlow;
+}
+
+async function check() {
+  if (updateFlow.phase === "checking" || updateFlow.phase === "downloading") return;
+  setUpdateFlow({ phase: "checking", error: "" });
+  try {
+    const found = await checkForUpdate();
+    if (found) setUpdateFlow({ info: found, phase: "available" });
+    else setUpdateFlow({ phase: "uptodate" });
+  } catch (e) {
+    setUpdateFlow({ error: e instanceof Error ? e.message : String(e), phase: "error" });
+  }
+}
+
+async function install() {
+  if (updateFlow.phase === "downloading") return;
+  setUpdateFlow({ phase: "downloading", error: "", progress: null });
+  try {
+    // On success the app relaunches and this call never returns.
+    await applyUpdate((p) => setUpdateFlow({ progress: p }));
+  } catch (e) {
+    setUpdateFlow({ error: e instanceof Error ? e.message : String(e), phase: "error" });
+  }
+}
+
 export function SoftwareUpdates() {
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [info, setInfo] = useState<UpdateInfo | null>(null);
-  const [progress, setProgress] = useState<DownloadProgress | null>(null);
-  const [error, setError] = useState("");
+  const { phase, info, progress, error } = useSyncExternalStore(subscribe, getSnapshot);
 
   // No Tauri runtime (browser dev shell) → nothing to update.
   if (!updatesSupported()) {
@@ -38,36 +87,6 @@ export function SoftwareUpdates() {
     );
   }
 
-  async function check() {
-    setPhase("checking");
-    setError("");
-    try {
-      const found = await checkForUpdate();
-      if (found) {
-        setInfo(found);
-        setPhase("available");
-      } else {
-        setPhase("uptodate");
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setPhase("error");
-    }
-  }
-
-  async function install() {
-    setPhase("downloading");
-    setError("");
-    setProgress(null);
-    try {
-      // On success the app relaunches and this call never returns.
-      await applyUpdate(setProgress);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setPhase("error");
-    }
-  }
-
   const busy = phase === "checking" || phase === "downloading";
   const pct = progress?.fraction != null ? Math.round(progress.fraction * 100) : null;
 
@@ -79,7 +98,7 @@ export function SoftwareUpdates() {
         <div className="row" style={{ flex: 1, justifyContent: "space-between" }}>
           <span className="hint" style={{ fontFamily: "var(--mono, monospace)" }}>v{__APP_VERSION__}</span>
           {phase !== "available" && phase !== "downloading" && (
-            <button className="state-chip" onClick={() => void check()} disabled={busy}>
+            <button className="btn btn-sm" onClick={() => void check()} disabled={busy}>
               {phase === "checking" ? "Checking…" : "Check for updates"}
             </button>
           )}
@@ -99,8 +118,8 @@ export function SoftwareUpdates() {
             ) : null}
           </p>
           <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
-            <button className="state-chip" onClick={() => setPhase("idle")}>Later</button>
-            <button className="state-chip on" onClick={() => void install()}>Download &amp; install</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setUpdateFlow({ phase: "idle" })}>Later</button>
+            <button className="btn btn-primary btn-sm" onClick={() => void install()}>Download &amp; install</button>
           </div>
         </>
       )}
@@ -114,9 +133,9 @@ export function SoftwareUpdates() {
 
       {phase === "error" && (
         <>
-          <p className="hint" style={{ color: "var(--danger, #ff6b6b)" }}>Update failed: {error}</p>
+          <p className="hint error">Update failed: {error}</p>
           <div className="row" style={{ justifyContent: "flex-end" }}>
-            <button className="state-chip" onClick={() => void check()}>Try again</button>
+            <button className="btn btn-sm" onClick={() => void check()}>Try again</button>
           </div>
         </>
       )}

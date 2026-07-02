@@ -96,11 +96,20 @@ function clampSize(inst: WidgetInstance, defaults: OverlayDefaults): WidgetInsta
   return { ...inst, size: { w: Math.max(inst.size.w, min.w), h: Math.max(inst.size.h, min.h) } };
 }
 
+/** True when v is a finite number — guards persisted JSON against NaN/strings. */
+function finiteNum(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
 function normalizeDefaults(d: Partial<OverlayDefaults> | undefined): OverlayDefaults {
   return {
-    opacity: d?.opacity ?? DEFAULT_DEFAULTS.opacity,
-    scale: d?.scale ?? DEFAULT_DEFAULTS.scale,
-    showIn: Array.isArray(d?.showIn) ? (d!.showIn as SessionStateKey[]) : [...DEFAULT_DEFAULTS.showIn],
+    opacity: finiteNum(d?.opacity) ? d!.opacity! : DEFAULT_DEFAULTS.opacity,
+    scale: finiteNum(d?.scale) ? d!.scale! : DEFAULT_DEFAULTS.scale,
+    // Filter to valid state keys (same as migrateShowIn) so a corrupt blob can't
+    // smuggle garbage into every inheriting widget's visibility gate.
+    showIn: Array.isArray(d?.showIn)
+      ? d!.showIn.filter((s): s is SessionStateKey => ALL_SESSION_STATES.includes(s as SessionStateKey))
+      : [...DEFAULT_DEFAULTS.showIn],
   };
 }
 
@@ -185,6 +194,15 @@ function emit() {
 let broadcaster: ((blob: string) => void) | null = null;
 let selectionBroadcaster: ((id: string | null) => void) | null = null;
 
+/**
+ * True once a sync message from another window has been applied. `init()`'s
+ * disk read and the other window's initial broadcast race; if the broadcast
+ * lands first (e.g. this window started after edits were already made
+ * elsewhere), the disk load resolving afterwards must not clobber it with a
+ * stale snapshot — see `init()`.
+ */
+let externalApplied = false;
+
 function currentBlob(): ConfigBlob {
   return {
     version: CONFIG_VERSION,
@@ -198,9 +216,20 @@ function currentBlob(): ConfigBlob {
 // --- persistence (debounced) + broadcast (faster, so other windows feel live) ---
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let broadcastTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Write the current blob to disk; a failure is logged and retried once so a
+ *  transient FS error doesn't silently revert the layout on next launch. */
+function persistNow() {
+  const data = JSON.stringify(currentBlob());
+  saveConfig(data).catch((err) => {
+    console.error("Layout save failed, retrying once:", err);
+    saveConfig(data).catch((err2) => console.error("Layout save retry failed — changes may not persist:", err2));
+  });
+}
+
 function schedulePersist() {
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => void saveConfig(JSON.stringify(currentBlob())), 400);
+  saveTimer = setTimeout(persistNow, 400);
   if (broadcastTimer) clearTimeout(broadcastTimer);
   broadcastTimer = setTimeout(() => broadcaster?.(JSON.stringify(currentBlob())), 120);
 }
@@ -223,16 +252,36 @@ function normalizeProfiles(profiles: Record<string, Layout>, defaults: OverlayDe
   const out: Record<string, Layout> = {};
   for (const [name, layout] of Object.entries(profiles)) {
     const widgets = (layout?.widgets ?? [])
-      .map((w) => {
+      .map((w, i) => {
         const def = getWidgetDef(w.type);
         if (!def) return null;
+        // A corrupt/hand-edited config file can carry a widget with a missing or
+        // non-finite position/size; fall back to a staggered default position and
+        // the widget's own default size rather than letting NaN/undefined reach
+        // rendering (which would blank the whole overlay — WidgetHost reads these
+        // directly into inline styles).
+        const rawPos = (w as { position?: { x?: unknown; y?: unknown } }).position;
+        const rawSize = (w as { size?: { w?: unknown; h?: unknown } }).size;
+        const position =
+          finiteNum(rawPos?.x) && finiteNum(rawPos?.y)
+            ? { x: rawPos!.x as number, y: rawPos!.y as number }
+            : { x: 40 + i * 24, y: 40 + i * 24 };
+        const size =
+          finiteNum(rawSize?.w) && finiteNum(rawSize?.h) && (rawSize!.w as number) > 0 && (rawSize!.h as number) > 0
+            ? { w: rawSize!.w as number, h: rawSize!.h as number }
+            : { ...def.defaultSize };
         const inst: WidgetInstance = {
           ...w,
+          instanceId: typeof w.instanceId === "string" && w.instanceId ? w.instanceId : uid(),
+          position,
+          size,
+          opacity: finiteNum(w.opacity) ? w.opacity : DEFAULT_DEFAULTS.opacity,
+          scale: finiteNum(w.scale) ? w.scale : 1,
           showIn: migrateShowIn((w as { showIn?: unknown }).showIn),
           useGeneralOpacity: w.useGeneralOpacity ?? true,
           useGeneralScale: w.useGeneralScale ?? true,
           useGeneralShowIn: w.useGeneralShowIn ?? true,
-          vrDepth: typeof w.vrDepth === "number" ? w.vrDepth : 0,
+          vrDepth: finiteNum(w.vrDepth) ? w.vrDepth : 0,
           config: { ...structuredClone(def.defaultConfig), ...(w.config ?? {}) },
         };
         // Heal layouts saved before content-aware minimums existed: a widget
@@ -278,6 +327,7 @@ export const layoutStore = {
         selectedId: stillThere ? state.selectedId : null,
         loaded: true,
       };
+      externalApplied = true;
       emit();
     } catch {
       /* ignore malformed sync */
@@ -288,6 +338,14 @@ export const layoutStore = {
   applyExternalSelection(id: string | null) {
     state = { ...state, selectedId: id };
     emit();
+  },
+
+  /** Re-broadcast the current blob immediately (bypassing the debounce). Used to
+   *  answer another window's just-opened "resend your state" request, since a
+   *  broadcast sent before that window's listener registered would otherwise be
+   *  lost — see `sync.ts`'s startup handshake. */
+  broadcastNow() {
+    broadcaster?.(JSON.stringify(currentBlob()));
   },
 
   /** Global overlay defaults (inherited by widgets via their useGeneral* flags). */
@@ -319,6 +377,14 @@ export const layoutStore = {
 
   async init() {
     const raw = await loadConfig();
+    // A sync broadcast from another window already landed while this disk read
+    // was in flight — it's necessarily fresher than what's on disk, so applying
+    // the disk snapshot now would silently discard it. Just mark loaded.
+    if (externalApplied) {
+      state = { ...state, loaded: true };
+      emit();
+      return;
+    }
     if (raw) {
       try {
         const blob = JSON.parse(raw) as ConfigBlob;
@@ -404,7 +470,21 @@ export const layoutStore = {
       widgets: layout.widgets.map((w) => {
         if (w.instanceId !== id) return w;
         const def = getWidgetDef(w.type);
-        return def ? { ...w, config: structuredClone(def.defaultConfig) } : w;
+        if (!def) return w;
+        const freshConfig = structuredClone(def.defaultConfig);
+        // Mirror the manager's content-driven resize (WidgetConfigEditor's
+        // setConfig): a reset can turn sections back on, so grow/shrink by the
+        // same delta a manual toggle would, then clamp to the content floor —
+        // otherwise restored content renders squeezed into the old box.
+        let size = w.size;
+        if (def.contentHeight) {
+          const deltaDesign = def.contentHeight(freshConfig as never) - def.contentHeight(w.config as never);
+          if (deltaDesign !== 0) {
+            const eff = scaleOf(w, state.defaults);
+            size = { w: w.size.w, h: Math.max(0, Math.round(w.size.h + deltaDesign * eff)) };
+          }
+        }
+        return clampSize({ ...w, config: freshConfig, size }, state.defaults);
       }),
     });
   },
@@ -422,23 +502,43 @@ export const layoutStore = {
     schedulePersist();
   },
 
-  newProfile(name: string) {
+  /**
+   * Create a new profile as a copy of the *currently active* layout (not the
+   * stock default — switching to a fresh profile shouldn't blow away the setup
+   * you were just looking at). Returns an error message on an empty/duplicate
+   * name, or null on success, so the caller can show it instead of a silent
+   * no-op.
+   */
+  newProfile(name: string): string | null {
     const trimmed = name.trim();
-    if (!trimmed || state.profiles[trimmed]) return;
+    if (!trimmed) return "Enter a profile name.";
+    if (state.profiles[trimmed]) return `A profile named "${trimmed}" already exists.`;
+    const source = current();
+    const cloned: Layout = {
+      name: trimmed,
+      // Fresh instance ids: profiles are independent, and reusing ids across
+      // them would let a stale selection in one profile match a widget in another.
+      widgets: structuredClone(source.widgets).map((w) => ({ ...w, instanceId: uid() })),
+    };
     state = {
       ...state,
-      profiles: { ...state.profiles, [trimmed]: { ...defaultLayout(), name: trimmed } },
+      profiles: { ...state.profiles, [trimmed]: cloned },
       active: trimmed,
       selectedId: null,
     };
     emit();
     schedulePersist();
+    return null;
   },
 
-  /** Rename a profile (and re-point any car bindings + the active pointer). */
-  renameProfile(oldName: string, newName: string) {
+  /** Rename a profile (and re-point any car bindings + the active pointer).
+   *  Returns an error message on an empty/duplicate name, or null on success. */
+  renameProfile(oldName: string, newName: string): string | null {
     const trimmed = newName.trim();
-    if (!trimmed || !state.profiles[oldName] || state.profiles[trimmed]) return;
+    if (!trimmed) return "Enter a profile name.";
+    if (!state.profiles[oldName]) return `Profile "${oldName}" no longer exists.`;
+    if (trimmed === oldName) return null;
+    if (state.profiles[trimmed]) return `A profile named "${trimmed}" already exists.`;
     const profiles: Record<string, Layout> = {};
     for (const [name, layout] of Object.entries(state.profiles)) {
       if (name === oldName) profiles[trimmed] = { ...layout, name: trimmed };
@@ -456,6 +556,7 @@ export const layoutStore = {
     };
     emit();
     schedulePersist();
+    return null;
   },
 
   /** Bind the given car model to the active profile (per-car auto-switch). */

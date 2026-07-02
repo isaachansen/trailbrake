@@ -45,6 +45,35 @@ function GeneralRow({
   );
 }
 
+function decimalsFor(step: number): number {
+  if (!step || Number.isInteger(step)) return 0;
+  const s = step.toString();
+  const i = s.indexOf(".");
+  return i === -1 ? 0 : s.length - i - 1;
+}
+
+// Only treat a trailing "(...)" as a unit when it's actually one — several
+// config labels use parens for a qualifier instead (e.g. DashCluster's
+// "Redline (fallback)"), which must stay a bare number, not "8000 fallback".
+const KNOWN_UNIT_RE = /\((s|ms|m|mm|cm|km|m\/s|km\/h|mph|L|kg|g|RPM|rpm|px|%|°|deg)\)\s*$/;
+
+/** Format a number-slider value with the unit its label implies, e.g. label
+ *  "Range (s)" → "8 s", "Panel size (×)" → "1.50×" — rather than a bare digit
+ *  the user has to guess the meaning of. Falls back to the plain number when
+ *  the label carries no recognized unit. */
+function formatSliderValue(label: string, step: number): ((v: number) => string) | undefined {
+  const decimals = decimalsFor(step);
+  const unitMatch = label.match(KNOWN_UNIT_RE);
+  if (unitMatch) {
+    const unit = unitMatch[1];
+    return (v: number) => `${v.toFixed(decimals)} ${unit}`;
+  }
+  if (label.includes("×")) {
+    return (v: number) => `${v.toFixed(Math.max(decimals, 1))}×`;
+  }
+  return undefined;
+}
+
 function summarizeStates(states: SessionStateKey[]): string {
   if (states.length >= SESSION_STATES.length) return "Always";
   if (states.length === 0) return "Never";
@@ -128,7 +157,14 @@ export function WidgetConfigEditor({ instance }: Props) {
         if (f.type === "number") {
           return (
             <Field label={f.label} key={f.key}>
-              <Slider value={Number(value)} min={f.min} max={f.max} step={f.step} onChange={(v) => setConfig({ [f.key]: v })} />
+              <Slider
+                value={Number(value)}
+                min={f.min}
+                max={f.max}
+                step={f.step}
+                onChange={(v) => setConfig({ [f.key]: v })}
+                format={formatSliderValue(f.label, f.step)}
+              />
             </Field>
           );
         }
@@ -147,6 +183,20 @@ export function WidgetConfigEditor({ instance }: Props) {
           return (
             <Field label={f.label} key={f.key}>
               <ColorField value={String(value ?? f.presets[0]?.hex ?? "#ffffff")} presets={f.presets} onChange={(hex) => setConfig({ [f.key]: hex })} />
+            </Field>
+          );
+        }
+        if (f.type === "text") {
+          return (
+            <Field label={f.label} key={f.key}>
+              <input
+                className="input"
+                type="text"
+                style={{ flex: 1 }}
+                value={typeof value === "string" ? value : ""}
+                placeholder={f.placeholder}
+                onChange={(e) => setConfig({ [f.key]: e.target.value })}
+              />
             </Field>
           );
         }

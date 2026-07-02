@@ -84,10 +84,47 @@ function emit() {
   listeners.forEach((l) => l());
 }
 
+/** Shape-check a parsed settings blob field-by-field so a corrupt/hand-edited
+ *  file degrades to defaults per-field instead of poisoning the whole object
+ *  (e.g. `JSON.parse` happily returns `{}` or an array, and any field could be
+ *  the wrong type). */
+function sanitizeSettings(parsed: unknown): AppSettings {
+  const p = (parsed && typeof parsed === "object" ? (parsed as Partial<AppSettings>) : {}) as Partial<AppSettings>;
+  const vr = (p.vr && typeof p.vr === "object" ? (p.vr as Partial<VrSettings>) : {}) as Partial<VrSettings>;
+  const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  return {
+    editHotkey: typeof p.editHotkey === "string" && p.editHotkey ? p.editHotkey : DEFAULT_SETTINGS.editHotkey,
+    autoShow: typeof p.autoShow === "boolean" ? p.autoShow : DEFAULT_SETTINGS.autoShow,
+    monitorIndex: finite(p.monitorIndex) ? p.monitorIndex : null,
+    units: p.units === "metric" || p.units === "imperial" ? p.units : DEFAULT_SETTINGS.units,
+    accentColor: typeof p.accentColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.accentColor) ? p.accentColor : DEFAULT_SETTINGS.accentColor,
+    previewMock: typeof p.previewMock === "boolean" ? p.previewMock : DEFAULT_SETTINGS.previewMock,
+    panelStyle: p.panelStyle === "flat" || p.panelStyle === "liquid" ? p.panelStyle : DEFAULT_SETTINGS.panelStyle,
+    vr: {
+      enabled: typeof vr.enabled === "boolean" ? vr.enabled : DEFAULT_VR_SETTINGS.enabled,
+      backend: vr.backend === "auto" || vr.backend === "openvr" || vr.backend === "openxr" ? vr.backend : DEFAULT_VR_SETTINGS.backend,
+      distanceM: finite(vr.distanceM) ? vr.distanceM : DEFAULT_VR_SETTINGS.distanceM,
+      scale: finite(vr.scale) ? vr.scale : DEFAULT_VR_SETTINGS.scale,
+      curvature: finite(vr.curvature) ? vr.curvature : DEFAULT_VR_SETTINGS.curvature,
+      headLocked: typeof vr.headLocked === "boolean" ? vr.headLocked : DEFAULT_VR_SETTINGS.headLocked,
+    },
+  };
+}
+
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Write current settings to disk; a failure is logged and retried once so a
+ *  transient FS error doesn't silently revert preferences on next launch. */
+function persistNow() {
+  const data = JSON.stringify(settings);
+  saveSettings(data).catch((err) => {
+    console.error("Settings save failed, retrying once:", err);
+    saveSettings(data).catch((err2) => console.error("Settings save retry failed — changes may not persist:", err2));
+  });
+}
 function schedulePersist() {
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => void saveSettings(JSON.stringify(settings)), 300);
+  saveTimer = setTimeout(persistNow, 300);
 }
 
 export const settingsStore = {
@@ -107,9 +144,7 @@ export const settingsStore = {
     const raw = await loadSettings();
     if (raw) {
       try {
-        const parsed = JSON.parse(raw) as Partial<AppSettings>;
-        // Deep-merge the nested VR block so new fields pick up defaults.
-        settings = { ...DEFAULT_SETTINGS, ...parsed, vr: { ...DEFAULT_VR_SETTINGS, ...(parsed.vr ?? {}) } };
+        settings = sanitizeSettings(JSON.parse(raw));
       } catch {
         /* keep defaults */
       }
@@ -119,9 +154,10 @@ export const settingsStore = {
     // Push saved prefs to the backend so the live app matches.
     await controls.setEditHotkey(settings.editHotkey).catch(() => {});
     await controls.setAutoShow(settings.autoShow).catch(() => {});
-    if (settings.monitorIndex != null) {
-      await controls.setOverlayMonitor(settings.monitorIndex).catch(() => {});
-    }
+    // Always apply, including null ("auto"), so a saved auto preference is
+    // actually re-asserted on launch rather than left to whatever the backend
+    // last happened to have.
+    await controls.setOverlayMonitor(settings.monitorIndex).catch(() => {});
     // Re-arm VR if it was on (no-op / graceful error if the runtime isn't up).
     if (settings.vr.enabled) {
       await controls.vrSetEnabled(true, vrGlobalsOf(settings.vr), settings.vr.backend).catch(() => {});
@@ -160,11 +196,20 @@ export const settingsStore = {
     if (settings.vr.enabled) void controls.vrSetGlobals(vrGlobalsOf(settings.vr)).catch(() => {});
   },
 
-  async setEditHotkey(accel: string) {
+  /** Register the new hotkey with the backend *before* persisting/applying it
+   *  locally — if the accelerator is already taken (or otherwise invalid), the
+   *  old hotkey stays in effect and this returns the backend's error message
+   *  for the UI to show. Returns null on success. */
+  async setEditHotkey(accel: string): Promise<string | null> {
+    try {
+      await controls.setEditHotkey(accel);
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
     settings = { ...settings, editHotkey: accel };
     emit();
     schedulePersist();
-    await controls.setEditHotkey(accel).catch(() => {});
+    return null;
   },
 
   async setAutoShow(enabled: boolean) {
@@ -178,7 +223,8 @@ export const settingsStore = {
     settings = { ...settings, monitorIndex: index };
     emit();
     schedulePersist();
-    if (index != null) await controls.setOverlayMonitor(index).catch(() => {});
+    // Always call — null ("Auto") must apply immediately too, not just on restart.
+    await controls.setOverlayMonitor(index).catch(() => {});
   },
 
   /** Display units (metric/imperial) — widgets read it live; synced cross-window. */

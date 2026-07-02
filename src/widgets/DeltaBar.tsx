@@ -25,7 +25,14 @@ const defaultConfig: DeltaBarConfig = {
 
 function DeltaBar({ theme, config }: BaseWidgetProps<DeltaBarConfig>) {
   const slow = useSlow();
-  const rawDelta = config.reference === "best" ? slow?.deltaBestS : slow?.deltaSessionBestS;
+  // A "vs best" delta with no best lap to be relative to is meaningless — treat
+  // as absent (empty bar, "--") rather than trusting a fabricated value.
+  const rawDelta =
+    config.reference === "best"
+      ? slow?.bestLapS != null
+        ? slow?.deltaBestS
+        : null
+      : slow?.deltaSessionBestS;
   // Bar uses the raw delta (already clamped to ±rangeS by frac below), but the
   // numeric readout uses a validity-gated value so out-lap spikes show "--".
   const delta = rawDelta ?? null;
@@ -47,7 +54,7 @@ function DeltaBar({ theme, config }: BaseWidgetProps<DeltaBarConfig>) {
         flexDirection: "column",
         justifyContent: "center",
         gap: "0.5em",
-        padding: "0 1em",
+        padding: theme.widgetPad,
         boxSizing: "border-box",
         color: theme.colors.text,
       }}

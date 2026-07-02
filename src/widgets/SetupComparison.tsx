@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useSlow } from "../store/hooks";
 import { WidgetTitle } from "./WidgetTitle";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
@@ -26,12 +26,14 @@ function SetupComparison({ theme, config }: BaseWidgetProps<SetupComparisonConfi
   const t = theme.colors;
   const mono = theme.font.mono;
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
-  const labelRef = useRef(config.label);
 
   const capture = () => {
     if (!slow) return;
+    // Read the configured label at capture time — a useRef initializer would
+    // freeze it at mount, so changing the label in settings wouldn't affect
+    // snapshots taken afterward.
     const snap: Snapshot = {
-      label: labelRef.current || `Snap ${snapshots.length + 1}`,
+      label: config.label || `Snap ${snapshots.length + 1}`,
       time: Date.now(),
       brakeBiasPct: slow.brakeBiasPct ?? null,
       absActive: slow.absActive ?? null,
@@ -62,7 +64,7 @@ function SetupComparison({ theme, config }: BaseWidgetProps<SetupComparisonConfi
   ];
 
   return (
-    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", gap: 6, padding: "10px 14px", boxSizing: "border-box", color: t.text, overflow: "hidden" }}>
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", gap: 6, padding: theme.widgetPad, boxSizing: "border-box", color: t.text, overflow: "hidden" }}>
       <WidgetTitle
         title="Setup Comparison"
         theme={theme}
@@ -71,15 +73,15 @@ function SetupComparison({ theme, config }: BaseWidgetProps<SetupComparisonConfi
             onClick={capture}
             disabled={!slow}
             style={{
-              padding: "3px 12px",
-              border: "none",
+              padding: "3px 10px",
+              border: `1px solid ${slow ? t.accent : t.surfaceBorder}`,
               borderRadius: 6,
               cursor: slow ? "pointer" : "not-allowed",
-              background: t.accent,
-              color: "#0a0b0e",
+              background: "transparent",
+              color: slow ? t.accent : t.textDim2,
               font: `700 10px ${theme.font.family}`,
               letterSpacing: "0.04em",
-              opacity: slow ? 1 : 0.4,
+              opacity: slow ? 1 : 0.5,
             }}
           >
             + Snapshot
@@ -88,8 +90,18 @@ function SetupComparison({ theme, config }: BaseWidgetProps<SetupComparisonConfi
       />
 
       {snapshots.length === 0 ? (
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: t.textDim2, fontSize: "0.7em", fontWeight: 500 }}>
-          Capture setup snapshots to compare changes.
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, textAlign: "center", padding: `0 ${theme.space.lg}px` }}>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke={t.textDim2} strokeWidth="1.4" style={{ marginBottom: 2 }}>
+            <rect x="3" y="6" width="12" height="15" rx="2" />
+            <rect x="9" y="3" width="12" height="15" rx="2" fill={t.surface} />
+          </svg>
+          <div style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.8em", letterSpacing: "0.02em", color: t.text }}>No snapshots yet</div>
+          <div style={{ fontSize: "0.72em", fontWeight: 500, color: t.textDim, lineHeight: 1.4, maxWidth: "22em" }}>
+            Capture your current setup to compare it against later changes.
+          </div>
+          <div style={{ fontFamily: theme.font.label, fontSize: "0.6em", fontWeight: 600, letterSpacing: "0.05em", color: t.textDim2, marginTop: 2 }}>
+            Press + Snapshot while in the car
+          </div>
         </div>
       ) : (
         <div style={{ flex: 1, overflow: "auto" }}>
@@ -145,8 +157,8 @@ export const setupComparisonDef: WidgetDefinition<SetupComparisonConfig> = {
   name: "Setup Comparison",
   // Work in progress — hidden from the catalog in release builds (see contract).
   draft: true,
-  defaultSize: { w: 380, h: 300 },
-  minSize: { w: 280, h: 180 },
+  defaultSize: { w: 380, h: 170 },
+  minSize: { w: 280, h: 150 },
   defaultConfig,
   requiredPaths: ["slow"],
   requiredCapabilities: ["carSetup"],

@@ -65,8 +65,8 @@ jobs:
           SIZE=$(wc -c < crates/iracing-connector/assets/track_maps.json)
           echo "track_maps.json size: ${SIZE} bytes"
           # Sanity: should be at least 100KB if tracks were baked successfully
-          if [ "$SIZE" -lt 10240 ]; then
-            echo "track_maps.json is suspiciously small (<10KB) — likely auth failed"
+          if [ "$SIZE" -lt 102400 ]; then
+            echo "track_maps.json is suspiciously small (<100KB) — likely auth failed"
             exit 1
           fi
 

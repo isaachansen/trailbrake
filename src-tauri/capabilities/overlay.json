@@ -1,0 +1,11 @@
+{
+  "identifier": "overlay",
+  "description": "Core + event/window/webview access for the overlay window only. No global-shortcut/updater/process grants: the overlay webview never calls those plugins (the edit hotkey is registered and toggled entirely on the Rust side; update checks and relaunch are manager-only flows in src/store/updater.ts).",
+  "windows": ["overlay"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:default",
+    "core:webview:default"
+  ]
+}

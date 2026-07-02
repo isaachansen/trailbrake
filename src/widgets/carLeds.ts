@@ -54,11 +54,29 @@ function tokenize(s: string): string[] {
     .filter(Boolean);
 }
 
+// Some real dashes (BMW M4 GT3, Audi R8 LMS EVO2, Mercedes W12/W13, …) have
+// physical gap segments in the strip, which the dataset marks with color
+// "#000000" and a 0 threshold in every gear. Rendered as permanently-dark
+// slots they read as dead pixels on an overlay, so strip them out entirely:
+// widgets see only the LEDs that actually light, with colors and per-gear
+// thresholds staying index-aligned.
+function stripGaps(car: CarLeds): CarLeds {
+  const keep: number[] = [];
+  for (let i = 0; i < car.colors.length; i++) if (car.colors[i] !== "#000000") keep.push(i);
+  if (keep.length === car.colors.length) return car;
+  const gears: Record<string, CarLedGear> = {};
+  for (const [k, g] of Object.entries(car.gears)) {
+    gears[k] = { redline: g.redline, leds: keep.map((i) => g.leds[i]) };
+  }
+  return { ...car, ledCount: keep.length, colors: keep.map((i) => car.colors[i]), gears };
+}
+
 // Indexes built once.
 const byKey = new Map<string, CarLeds>();
 const byId = new Map<string, CarLeds>();
 const tokenIndex: { car: CarLeds; tokens: Set<string> }[] = [];
-for (const car of ledData.cars) {
+for (const rawCar of ledData.cars) {
+  const car = stripGaps(rawCar);
   byKey.set(norm(car.carName), car);
   byId.set(car.carId, car);
   tokenIndex.push({ car, tokens: new Set(tokenize(car.carName)) });

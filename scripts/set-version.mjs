@@ -7,6 +7,7 @@
 //        node scripts/set-version.mjs 1.0.0
 
 import { readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,4 +50,19 @@ const changes = [
 
 console.log(`Set version → ${version}`);
 for (const [file, old] of changes) console.log(`  ${file}: ${old} → ${version}`);
+
+// Keep Cargo.lock's workspace-member entries in sync with Cargo.toml, so the
+// version bump doesn't leave the lockfile pointing at the old version (which
+// `cargo check`/CI would otherwise silently tolerate but a strict lockfile
+// check would not).
+const update = spawnSync("cargo", ["update", "--workspace"], {
+  cwd: ROOT,
+  stdio: "inherit",
+});
+if (update.error || update.status !== 0) {
+  console.error(`\ncargo update --workspace failed — update Cargo.lock manually before committing.`);
+  process.exit(1);
+}
+console.log(`  Cargo.lock: updated`);
+
 console.log(`\nNext: rebuild the installer (npm run tauri build) and commit.`);

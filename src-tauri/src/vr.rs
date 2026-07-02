@@ -20,6 +20,12 @@ pub const EVT_VR_STATUS: &str = "overlay://vr-status";
 #[derive(Default)]
 pub struct VrState {
     pub manager: Mutex<Option<VrManager>>,
+    /// Serializes enable/disable transitions. SteamVR init takes seconds; a
+    /// double-click or a racing disable must not observe a stale `manager` slot
+    /// and start a second compositor (or leave `vr_active` inconsistent). Kept
+    /// separate from `manager` so the slow init never blocks the ~60 Hz
+    /// `vr_set_layout` hot path.
+    transition: Mutex<()>,
 }
 
 /// Native handle of the overlay window, as an `isize` the compositor can use.
@@ -64,6 +70,9 @@ pub fn vr_set_enabled(
     globals: Option<VrGlobals>,
 ) -> Result<VrStatus, String> {
     let st = app.state::<VrState>();
+    // Make the whole enable/disable atomic w.r.t. other enable/disable calls
+    // (the manager-slot check below is otherwise a TOCTOU).
+    let _transition = st.transition.lock().unwrap_or_else(|p| p.into_inner());
     if enabled {
         let already = st.manager.lock().unwrap().is_some();
         if !already {

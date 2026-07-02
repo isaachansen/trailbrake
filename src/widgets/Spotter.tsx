@@ -21,7 +21,10 @@ import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useStoreInstance } from "../store/storeContext";
 import { useScreenLayer } from "../components/screenLayer";
+import { useSettings } from "../store/appSettings";
+import { glassChrome, GlassSpecular } from "../components/liquidGlass";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
+import type { Theme } from "../theme/theme";
 
 export type SpotterDisplay = "both" | "widget" | "edges";
 
@@ -38,10 +41,15 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
   const t = theme.colors;
   const store = useStoreInstance();
   const { el: screenLayer, preview, fullScreen } = useScreenLayer();
+  // The host paints no chrome for this widget (transparentPanel), so the panel
+  // has to pick up the Liquid Glass setting itself — same helper WidgetHost uses
+  // for every other widget's panel, so the look matches exactly.
+  const glass = useSettings().panelStyle === "liquid";
 
   const leftRef = useRef<HTMLDivElement | null>(null);
   const rightRef = useRef<HTMLDivElement | null>(null);
   const wideRef = useRef<HTMLDivElement | null>(null);
+  const captionRef = useRef<HTMLDivElement | null>(null);
   const edgeLeftRef = useRef<HTMLDivElement | null>(null);
   const edgeRightRef = useRef<HTMLDivElement | null>(null);
   // The widget panel auto-hides: it pops in only while a car is alongside. We
@@ -72,8 +80,11 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
           phase < s || phase > e ? 0 : Math.sin(((phase - s) / (e - s)) * Math.PI);
         const r = bump(0.04, 0.44);
         const l = bump(0.54, 0.94);
-        if (leftRef.current) leftRef.current.style.opacity = (0.12 + 0.88 * l).toFixed(3);
-        if (rightRef.current) rightRef.current.style.opacity = (0.12 + 0.88 * r).toFixed(3);
+        // The idle bar is now a neutral outline (drawn in the always-visible
+        // base pill); this ref only controls the red "active" overlay fading
+        // in on top of it, so 0 = idle/neutral, 1 = fully lit.
+        if (leftRef.current) leftRef.current.style.opacity = l.toFixed(3);
+        if (rightRef.current) rightRef.current.style.opacity = r.toFixed(3);
         if (wideRef.current) wideRef.current.style.display = "none";
         if (edgeLeftRef.current) edgeLeftRef.current.style.opacity = (0.95 * l).toFixed(3);
         if (edgeRightRef.current) edgeRightRef.current.style.opacity = (0.95 * r).toFixed(3);
@@ -82,6 +93,7 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
           panelRef.current.style.opacity = "1";
           panelRef.current.style.transform = "scale(1)";
         }
+        setCaption(captionRef.current, l > 0.5, r > 0.5, t);
         raf = requestAnimationFrame(draw);
         return;
       }
@@ -114,8 +126,8 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
         warnR = fast?.carRight ?? slow?.carRight ?? false;
       }
 
-      if (leftRef.current) leftRef.current.style.opacity = warnL ? "1" : "0.12";
-      if (rightRef.current) rightRef.current.style.opacity = warnR ? "1" : "0.12";
+      if (leftRef.current) leftRef.current.style.opacity = warnL ? "1" : "0";
+      if (rightRef.current) rightRef.current.style.opacity = warnR ? "1" : "0";
       if (wideRef.current) wideRef.current.style.display = warnL && warnR ? "block" : "none";
 
       // The widget panel only pops up while a car is actually alongside, and
@@ -125,6 +137,7 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
         panelRef.current.style.opacity = alongside ? "1" : "0";
         panelRef.current.style.transform = alongside ? "scale(1)" : "scale(0.92)";
       }
+      setCaption(captionRef.current, warnL, warnR, t);
 
       // Screen-edge glow. Pulse it (~2 Hz, 0.72..1.0) when active so it grabs
       // peripheral attention while the driver is focused on the track — a steady
@@ -137,17 +150,31 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [store]);
+  }, [store, t]);
 
-  const bar: React.CSSProperties = {
+  // The bar is a neutral outline/tint pill that's always visible (so idle never
+  // reads as a dim, muddy red — a red-on-light-bg problem at low opacity), with
+  // a red "active" layer that fades in on top of it via the ref when a car is
+  // actually alongside.
+  const barBase: React.CSSProperties = {
+    position: "relative",
     width: "1.3em",
     // Cap the neighbour bars to door height so the player block stays the focal
     // point — full-height bars read as three equal pillars and flatten hierarchy.
     height: "78%",
     borderRadius: 8,
+    background: "rgba(128,128,128,0.10)",
+    border: "1px solid rgba(128,128,128,0.35)",
+    boxSizing: "border-box",
+    overflow: "hidden",
+  };
+  const barGlow: React.CSSProperties = {
+    position: "absolute",
+    inset: -1,
+    borderRadius: 8,
     background: t.loss,
-    opacity: 0.12,
     boxShadow: `0 0 20px ${t.loss}`,
+    opacity: 0,
     transition: "opacity 0.08s",
   };
 
@@ -188,31 +215,60 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
             height: "100%",
             display: "flex",
             flexDirection: "column",
+            position: "relative",
             color: t.text,
             padding: theme.space.lg,
             boxSizing: "border-box",
             // The widget owns its panel chrome (the host is transparent for the
-            // Spotter) so the whole thing can pop in / out with the signal.
-            background: t.surface,
-            border: `1px solid ${t.surfaceBorder}`,
-            borderRadius: theme.radius,
-            backdropFilter: theme.panelBlur,
-            WebkitBackdropFilter: theme.panelBlur,
+            // Spotter) so the whole thing can pop in / out with the signal. Mirrors
+            // WidgetHost's flat/Liquid Glass choice via the same shared helper,
+            // since the host never paints chrome for this widget.
+            ...(glass
+              ? glassChrome(1)
+              : {
+                  background: t.surface,
+                  border: `1px solid ${t.surfaceBorder}`,
+                  borderRadius: theme.radius,
+                  backdropFilter: theme.panelBlur,
+                  WebkitBackdropFilter: theme.panelBlur,
+                }),
             opacity: 0,
             transform: "scale(0.92)",
             transformOrigin: "center",
             transition: "opacity 0.16s ease, transform 0.16s ease",
           }}
         >
-          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: theme.space.lg, minHeight: 0 }}>
-            <div ref={leftRef} style={bar} />
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: theme.space.sm }}>
-              <div style={{ width: "2.3em", height: "4.1em", borderRadius: 8, background: t.accent, boxShadow: "0 0 18px rgba(255,45,142,0.55)" }} />
-              <div ref={wideRef} style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.7em", letterSpacing: "0.16em", color: t.amber, display: "none" }}>3 WIDE</div>
+          {glass && <GlassSpecular />}
+          <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: theme.space.lg, minHeight: 0 }}>
+              <div style={barBase}>
+                <div ref={leftRef} style={barGlow} />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: theme.space.sm }}>
+                <div style={{ width: "2.3em", height: "4.1em", borderRadius: 8, background: t.accent, boxShadow: "0 0 18px rgba(255,45,142,0.55)" }} />
+                <div ref={wideRef} style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.7em", letterSpacing: "0.16em", color: t.amber, display: "none" }}>3 WIDE</div>
+              </div>
+              <div style={barBase}>
+                <div ref={rightRef} style={barGlow} />
+              </div>
             </div>
-            <div ref={rightRef} style={bar} />
+            <div
+              ref={captionRef}
+              style={{
+                fontFamily: theme.font.label,
+                textAlign: "center",
+                marginTop: theme.space.md,
+                fontWeight: 600,
+                fontSize: "0.58em",
+                letterSpacing: "0.18em",
+                color: t.textDim2,
+                opacity: 0,
+                transition: "color 0.15s, opacity 0.15s ease",
+              }}
+            >
+              {" "}
+            </div>
           </div>
-          <div style={{ fontFamily: theme.font.label, textAlign: "center", marginTop: theme.space.md, fontWeight: 600, fontSize: "0.58em", letterSpacing: "0.18em", color: t.textDim2 }}>CAR ALONGSIDE</div>
         </div>
       )}
 
@@ -229,13 +285,43 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
   );
 }
 
+/**
+ * Drives the bottom caption from the same warn state as the bars/edges, via a
+ * ref (no re-render). There's no idle caption — a permanent dim "SPOTTER"
+ * read as a live assertion even with nothing nearby, so the line stays
+ * present (a non-breaking space, so the row's height never jumps) but faded
+ * to 0 opacity until a car is actually alongside, when it fades in and names
+ * the state.
+ */
+function setCaption(el: HTMLElement | null, warnL: boolean, warnR: boolean, t: Theme["colors"]) {
+  if (!el) return;
+  const alongside = warnL || warnR;
+  let text = " ";
+  let color = t.textDim2;
+  if (warnL && warnR) {
+    text = "3-WIDE";
+    color = t.amber;
+  } else if (warnL) {
+    text = "CAR LEFT";
+    color = t.loss;
+  } else if (warnR) {
+    text = "CAR RIGHT";
+    color = t.loss;
+  }
+  if (el.textContent !== text) el.textContent = text;
+  el.style.color = color;
+  el.style.opacity = alongside ? "1" : "0";
+}
+
 export const spotterDef: WidgetDefinition<SpotterConfig> = {
   id: "spotter",
   name: "Spotter",
   defaultSize: { w: 190, h: 190 },
   minSize: { w: 150, h: 150 },
   defaultConfig,
-  requiredPaths: ["slow"],
+  // Reads slow.cars/carLeft/carRight for proximity plus store.latestFast for the
+  // fast-path carLeft/carRight fallback.
+  requiredPaths: ["slow", "fast"],
   // No hard capability requirement — works with either proximity or carLeft/carRight.
   requiredCapabilities: [],
   configSchema: [

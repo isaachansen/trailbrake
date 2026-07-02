@@ -71,6 +71,10 @@ const TRACK_TURNS: &[(&str, f32, f32)] = &[
 struct MockCar {
     idx: u32,
     name: &'static str,
+    /// Real car model, so the roster (`car_screen_name`) and the player's
+    /// top-level `car_name` can agree instead of drifting to a generic
+    /// "{class} Car" placeholder.
+    car: &'static str,
     number: &'static str,
     country: &'static str,
     class_id: u32,
@@ -86,10 +90,15 @@ struct MockCar {
     base_gap: f32,
 }
 
+/// The player's car model — must match both the top-level `player.car_name`
+/// and the player's own entry in `cars` (built from `FIELD`).
+const PLAYER_CAR: &str = "BMW M4 GT3 EVO";
+
 const FIELD: &[MockCar] = &[
     MockCar {
         idx: 0,
         name: "M. Rossi",
+        car: "Cadillac V-Series.R",
         number: "92",
         country: "FR",
         class_id: 1,
@@ -107,6 +116,7 @@ const FIELD: &[MockCar] = &[
     MockCar {
         idx: 1,
         name: "K. Tanaka",
+        car: "Porsche 963",
         number: "6",
         country: "JP",
         class_id: 1,
@@ -124,6 +134,7 @@ const FIELD: &[MockCar] = &[
     MockCar {
         idx: 2,
         name: "L. Becker",
+        car: "Acura ARX-06",
         number: "51",
         country: "DE",
         class_id: 1,
@@ -141,6 +152,7 @@ const FIELD: &[MockCar] = &[
     MockCar {
         idx: 3,
         name: "S. Dubois",
+        car: "Porsche 911 GT3 R",
         number: "71",
         country: "GB",
         class_id: 2,
@@ -158,6 +170,7 @@ const FIELD: &[MockCar] = &[
     MockCar {
         idx: PLAYER_IDX,
         name: "You",
+        car: PLAYER_CAR,
         number: "4",
         country: "US",
         class_id: 2,
@@ -175,6 +188,7 @@ const FIELD: &[MockCar] = &[
     MockCar {
         idx: 5,
         name: "A. Novak",
+        car: "Audi R8 LMS EVO II",
         number: "44",
         country: "DE",
         class_id: 2,
@@ -192,6 +206,7 @@ const FIELD: &[MockCar] = &[
     MockCar {
         idx: 6,
         name: "T. Olsen",
+        car: "Ferrari 296 GT3",
         number: "7",
         country: "SE",
         class_id: 2,
@@ -209,6 +224,7 @@ const FIELD: &[MockCar] = &[
     MockCar {
         idx: 7,
         name: "M. Cairo",
+        car: "Lamborghini Huracán GT3 EVO2",
         number: "22",
         country: "ES",
         class_id: 2,
@@ -226,6 +242,7 @@ const FIELD: &[MockCar] = &[
     MockCar {
         idx: 8,
         name: "R. Mehta",
+        car: "BMW M4 GT3 EVO",
         number: "9",
         country: "GB",
         class_id: 2,
@@ -243,6 +260,7 @@ const FIELD: &[MockCar] = &[
     MockCar {
         idx: 9,
         name: "G. Fontana",
+        car: "McLaren Artura GT4",
         number: "36",
         country: "IT",
         class_id: 3,
@@ -260,6 +278,7 @@ const FIELD: &[MockCar] = &[
     MockCar {
         idx: 10,
         name: "H. Park",
+        car: "Ford Mustang GT4",
         number: "10",
         country: "JP",
         class_id: 3,
@@ -277,6 +296,7 @@ const FIELD: &[MockCar] = &[
     MockCar {
         idx: 11,
         name: "B. Costa",
+        car: "Aston Martin Vantage GT4",
         number: "59",
         country: "BR",
         class_id: 3,
@@ -294,6 +314,7 @@ const FIELD: &[MockCar] = &[
     MockCar {
         idx: 12,
         name: "J. Webb",
+        car: "Chevrolet Corvette Z06 GT3.R",
         number: "88",
         country: "US",
         class_id: 2,
@@ -428,7 +449,7 @@ impl MockConnector {
                 session_type: Some("Practice".to_string()),
                 time_remaining_s: Some((1800.0 - t as f64).max(0.0)),
                 laps_remaining: None,
-                total_cars: Some(1),
+                total_cars: Some(FIELD.len() as u32),
                 flags_raw: Some(0x40), // blue flag (faster car behind — let them pass)
                 air_temp_c: Some(22.0),
                 track_temp_c: Some(31.0),
@@ -488,9 +509,10 @@ impl MockConnector {
                 delta_best_s: Some(delta_best),
                 delta_session_best_s: Some(delta_best + 0.1),
                 position: Some(5),
-                class_position: Some(class_position(1, 5)),
+                // Player is class_id 2 (GT3) — count within that class, not GTP.
+                class_position: Some(class_position(2, 5)),
                 car_idx: Some(PLAYER_IDX),
-                car_name: Some("Ferrari 296 GT3".to_string()),
+                car_name: Some(PLAYER_CAR.to_string()),
                 on_track: Some(true),
                 in_garage: Some(false),
                 // Tie the spotter to the two weaving "near" cars (idx 3 right, 5 left)
@@ -557,7 +579,7 @@ impl MockConnector {
                 CarState {
                     car_idx: c.idx,
                     driver_name: Some(c.name.to_string()),
-                    car_screen_name: Some(format!("{} Car", c.class_name)),
+                    car_screen_name: Some(c.car.to_string()),
                     car_class_id: Some(c.class_id),
                     car_class_name: Some(c.class_name.to_string()),
                     class_color: Some(c.color),

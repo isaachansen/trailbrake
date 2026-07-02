@@ -92,6 +92,14 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
     dragRef.current = null;
     (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
   };
+  // A cancelled gesture (e.g. the OS/webview interrupts the pointer — alt-tab,
+  // touch cancel, another element stealing capture) never fires pointerup, so
+  // without this the drag/resize stays "live" and the next hover keeps moving
+  // the widget. onLostPointerCapture also covers capture being released for any
+  // other reason without an explicit endDrag call.
+  const cancelDrag = () => {
+    dragRef.current = null;
+  };
 
   const Comp = def.Component;
 
@@ -143,6 +151,8 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
           onPointerDown={beginMove}
           onPointerMove={onMove}
           onPointerUp={endDrag}
+          onPointerCancel={cancelDrag}
+          onLostPointerCapture={cancelDrag}
           style={{
             display: "flex",
             alignItems: "center",
@@ -227,6 +237,8 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
           onPointerDown={beginResize}
           onPointerMove={onMove}
           onPointerUp={endDrag}
+          onPointerCancel={cancelDrag}
+          onLostPointerCapture={cancelDrag}
           title="resize"
           style={{
             position: "absolute",

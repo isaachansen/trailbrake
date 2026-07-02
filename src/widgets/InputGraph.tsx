@@ -96,8 +96,10 @@ function InputGraph({ theme, config }: BaseWidgetProps<InputGraphConfig>) {
       const pedalBottom = config.showSpeed ? h * 0.64 : h - 4;
       const pedalH = Math.max(1, pedalBottom - padTop);
 
-      // Gridlines across the pedal region.
-      ctx.strokeStyle = theme.colors.gridLine;
+      // Gridlines across the pedal region. A mid-grey (not the white-alpha
+      // gridLine token) so the lines survive on light/bright backdrops too —
+      // same pattern as Radar's range rings (audit T2/§7).
+      ctx.strokeStyle = "rgba(128,128,128,0.22)";
       ctx.lineWidth = 1;
       ctx.beginPath();
       for (let i = 0; i <= 4; i++) {

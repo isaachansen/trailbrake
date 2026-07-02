@@ -47,12 +47,23 @@ export function SettingsPage() {
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
   const [capturing, setCapturing] = useState(false);
   const [hotkeyWarn, setHotkeyWarn] = useState(false);
+  const [hotkeyError, setHotkeyError] = useState<string | null>(null);
   const [wheelOpen, setWheelOpen] = useState(false);
+  const [vrError, setVrError] = useState<string | null>(null);
 
   useEffect(() => {
     void controls.listMonitors().then(setMonitors);
     void controls.vrStatus();
   }, []);
+
+  // Apply a new accelerator and surface a registration failure (e.g. the chord
+  // is already bound elsewhere) inline instead of swallowing it.
+  const applyHotkey = (accel: string) => {
+    setHotkeyError(null);
+    void settingsStore.setEditHotkey(accel).then((result) => {
+      setHotkeyError(typeof result === "string" ? result : null);
+    });
+  };
 
   // Capture a real key chord while "capturing", build the accelerator and apply it.
   useEffect(() => {
@@ -60,6 +71,10 @@ export function SettingsPage() {
     const onKey = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      if (e.key === "Escape") {
+        setCapturing(false);
+        return;
+      }
       const tok = keyToken(e);
       if (!tok) return; // wait for a real key, not a bare modifier
       const mods: string[] = [];
@@ -69,7 +84,7 @@ export function SettingsPage() {
       if (e.metaKey) mods.push("Super");
       setCapturing(false);
       setHotkeyWarn(mods.length === 0);
-      void settingsStore.setEditHotkey([...mods, tok].join("+"));
+      applyHotkey([...mods, tok].join("+"));
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -93,8 +108,17 @@ export function SettingsPage() {
         </Field>
         <Field label="Show on desktop">
           <div className="row" style={{ flex: 1, justifyContent: "space-between" }}>
-            <span className="hint">Keep the overlay visible now, even outside a session (for arranging widgets).</span>
-            <Toggle on={status.preview || status.editing} onChange={(v) => void controls.setPreview(v)} />
+            <span className="hint">
+              {status.editing
+                ? "On while edit mode is active — turn off edit mode to control this manually."
+                : "Keep the overlay visible now, even outside a session (for arranging widgets)."}
+            </span>
+            <Toggle
+              on={status.preview || status.editing}
+              disabled={status.editing}
+              title={status.editing ? "Overlay stays visible while edit mode is on" : undefined}
+              onChange={(v) => void controls.setPreview(v)}
+            />
           </div>
         </Field>
         <Field label="Demo data in preview">
@@ -259,17 +283,23 @@ export function SettingsPage() {
             className="btn btn-ghost btn-sm"
             onClick={() => {
               setHotkeyWarn(false);
-              void settingsStore.setEditHotkey(DEFAULT_SETTINGS.editHotkey);
+              applyHotkey(DEFAULT_SETTINGS.editHotkey);
             }}
           >
             Reset
           </button>
         </div>
+        {capturing && (
+          <div className="hint" style={{ marginTop: 8 }}>
+            A letter, number, or function key — usually with Ctrl, Alt, Shift, or ⊞. Esc cancels.
+          </div>
+        )}
         {hotkeyWarn && (
           <div className="hint" style={{ color: "var(--warn)", marginTop: 8 }}>
             ⚠ No modifier — this may clash with normal typing in games.
           </div>
         )}
+        {hotkeyError && <div className="hint error" style={{ marginTop: 8 }}>⚠ {hotkeyError}</div>}
       </div>
 
       <div className="card">
@@ -284,9 +314,16 @@ export function SettingsPage() {
               {vrLine}
               {vr.backend && vr.backend !== "none" ? <span className="muted"> · {vr.backend}</span> : null}
             </span>
-            <Toggle on={vrCfg.enabled} onChange={(v) => void settingsStore.setVrEnabled(v)} />
+            <Toggle
+              on={vrCfg.enabled}
+              onChange={(v) => {
+                setVrError(null);
+                void settingsStore.setVrEnabled(v).then((err) => setVrError(err));
+              }}
+            />
           </div>
         </Field>
+        {vrError && <div className="hint error" style={{ marginTop: -4, marginBottom: 4 }}>⚠ {vrError}</div>}
         <Field label="Runtime">
           <select
             className="select"
@@ -322,7 +359,7 @@ export function SettingsPage() {
         <Field label="Recenter">
           <div className="row" style={{ flex: 1, justifyContent: "space-between" }}>
             <span className="hint">Re-anchor panels to your current seated view (or use SteamVR's recenter).</span>
-            <button className="state-chip" onClick={() => void controls.vrRecenter()} disabled={!vr.active}>
+            <button className="btn btn-sm" onClick={() => void controls.vrRecenter()} disabled={!vr.active}>
               Recenter
             </button>
           </div>

@@ -7,7 +7,7 @@
 
 import { useRef } from "react";
 import { useSlow } from "../store/hooks";
-import { colorOf } from "./format";
+import { classColorMap, classColorOf } from "./raceColors";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface TrafficConfig {
@@ -25,6 +25,11 @@ function TrafficIndicator({ theme, config }: BaseWidgetProps<TrafficConfig>) {
   const playerIdx = slow?.playerCarIdx ?? null;
   const range = config.rangeS;
 
+  // App palette by class order (blue/purple/green/red) — the same shared
+  // assignment every other widget uses, rather than the sim's raw classColor
+  // (which is inconsistent across widgets and sometimes absent).
+  const ccol = classColorMap(slow?.cars ?? []);
+
   // Nearest neighbour within range.
   let near: { idx: number; gap: number; cls: string; clsColor: string } | null = null;
   for (const c of slow?.cars ?? []) {
@@ -32,7 +37,7 @@ function TrafficIndicator({ theme, config }: BaseWidgetProps<TrafficConfig>) {
     const g = c.gapToPlayerS;
     if (Math.abs(g) > range) continue;
     if (!near || Math.abs(g) < Math.abs(near.gap)) {
-      near = { idx: c.carIdx, gap: g, cls: c.carClassName ?? "", clsColor: colorOf(c.classColor, "#565c68") };
+      near = { idx: c.carIdx, gap: g, cls: c.carClassName ?? "", clsColor: classColorOf(ccol, c.carClassId) };
     }
   }
 
@@ -55,13 +60,13 @@ function TrafficIndicator({ theme, config }: BaseWidgetProps<TrafficConfig>) {
   const barPct = near == null ? 0 : Math.max(4, Math.min(100, (1 - Math.abs(near.gap) / range) * 100));
 
   return (
-    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", justifyContent: "center", gap: theme.space.lg, color: t.text, padding: "11px 14px", boxSizing: "border-box", overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 13, minHeight: 0 }}>
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", justifyContent: "center", gap: theme.space.lg, color: t.text, padding: theme.widgetPad, boxSizing: "border-box", overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: theme.space.lg, minHeight: 0 }}>
         <div style={{ fontWeight: 700, fontSize: "2em", lineHeight: 1, color: accent, width: "1.1em", textAlign: "center" }}>{arrow}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: theme.space.sm }}>
             <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.68em", letterSpacing: "0.04em", color: "#0a0b0e", background: near ? near.clsColor : "#565c68", padding: "1px 7px", borderRadius: 5 }}>{near?.cls || "—"}</span>
-            <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.82em", letterSpacing: "0.05em", color: "#fff", whiteSpace: "nowrap" }}>{msg}</span>
+            <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.82em", letterSpacing: "0.05em", color: t.text, whiteSpace: "nowrap" }}>{msg}</span>
           </div>
           <div style={{ fontFamily: theme.font.label, marginTop: 5, fontWeight: 600, fontSize: "0.62em", letterSpacing: "0.08em", color: t.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {near ? (
@@ -77,7 +82,7 @@ function TrafficIndicator({ theme, config }: BaseWidgetProps<TrafficConfig>) {
           </div>
         </div>
       </div>
-      <div style={{ flex: "0 0 auto", height: 5, borderRadius: 3, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+      <div style={{ flex: "0 0 auto", height: 5, borderRadius: 3, background: "rgba(128,128,128,0.25)", overflow: "hidden" }}>
         <div style={{ height: "100%", width: `${barPct}%`, background: accent, borderRadius: 3, transition: "width 0.2s linear" }} />
       </div>
     </div>

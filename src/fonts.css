@@ -1,0 +1,116 @@
+/* Local, self-hosted webfonts — replaces the Google Fonts <link> that used to
+   live in index.html. Only the families/weights actually referenced by the
+   app are bundled (see src/theme/theme.ts and src/manager/manager.css):
+     - Saira Condensed   400/500/600/700  (body/UI + telemetry numerics)
+     - Bricolage Grotesque 700            (manager "display" headings only)
+     - Hanken Grotesk    400/500/600/700  (manager body/UI text)
+     - JetBrains Mono    400/500/600/700  (telemetry digits, mono labels)
+   Latin subset only (matches what Google was serving by default). No italic
+   faces are bundled — nothing in the app requests a real italic face; the
+   one conditional `fontStyle: "italic"` (Relative.tsx) already relied on the
+   browser's synthesized oblique before this change (Saira Condensed was
+   never fetched with an italic axis from Google Fonts either), so this is
+   unchanged.
+
+   Note: `theme.font.label` / manager.css `--display` fallback both list a
+   "Saira SemiCondensed" family first. That name was never a real Google
+   Fonts family (the actual family is "Saira Semi Condensed", with a space)
+   so it silently 404'd server-side and the browser always fell through to
+   "Saira Condensed" for that text. That pre-existing (harmless) behavior is
+   preserved as-is here — no @font-face is registered for it, so the same
+   fallback happens locally. */
+
+@font-face {
+  font-family: "Saira Condensed";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/saira-condensed-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Saira Condensed";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/saira-condensed-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Saira Condensed";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/saira-condensed-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Saira Condensed";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/saira-condensed-700.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Bricolage Grotesque";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/bricolage-grotesque-700.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Hanken Grotesk";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/hanken-grotesk-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Hanken Grotesk";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/hanken-grotesk-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Hanken Grotesk";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/hanken-grotesk-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Hanken Grotesk";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/hanken-grotesk-700.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-700.woff2") format("woff2");
+}
