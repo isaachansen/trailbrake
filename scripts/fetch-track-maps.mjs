@@ -30,7 +30,6 @@
 
 import { svgPathProperties } from "svg-path-properties";
 import { cleanTurns } from "./clean-track-turns.mjs";
-import { registerHooks } from "node:module";
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -337,13 +336,24 @@ function bakeFromSampled(entry, override) {
   // aligned in the baked 0..1 space.
   const t = aspectTransform(pts);
   const points = pts.map(t);
-  // Corner labels. The dataset's own `number`/`name` assignment is unreliable
-  // (numbers don't run sequentially around the lap), so ignore it and re-number
-  // the markers by their actual position along the driving direction, starting
-  // at the start/finish line. `dir` is the sign of pct change in the driving
-  // direction: +1 normally, -1 when the path is reversed.
+  // Corner labels. The dataset's `normalizedTurns` mixes two different kinds of
+  // text markers scraped off the source track map: actual turn-number labels
+  // ("1", "2", ..., "8a") AND named straight/section/sponsor labels ("Uphill",
+  // "Sam Posey Straight", "Duffus Dip", "TV3"...) that sit *between* corners, not
+  // on one. Treating the latter as turns inflates the count (e.g. a 7-turn track
+  // reporting 16 "turns") and plants a mislabeled marker mid-straight, which also
+  // shifts every subsequent turn's derived number. Keep only entries whose label
+  // is shaped like a turn number before doing anything else with them.
+  const isTurnNumberLabel = (label) => /^\d+[a-z]?$/i.test(String(label ?? "").trim());
+  const turnMarkers = (entry.normalizedTurns ?? []).filter((tn) => isTurnNumberLabel(tn.name ?? tn.number));
+  // The dataset's own numbering is still unreliable even after that filter (e.g.
+  // duplicate/garbled digits from stroke+fill text-node pairs), so ignore the
+  // label value itself and re-number the surviving markers by their actual
+  // position along the driving direction, starting at the start/finish line.
+  // `dir` is the sign of pct change in the driving direction: +1 normally, -1
+  // when the path is reversed.
   let turns = [];
-  if (Array.isArray(entry.normalizedTurns) && entry.normalizedTurns.length) {
+  if (turnMarkers.length) {
     const pctOf = (tx, ty) => {
       let bestD = Infinity;
       let bestPct = 0;
@@ -359,7 +369,7 @@ function bakeFromSampled(entry, override) {
     const dir = reversed ? -1 : 1;
     // Lap fraction from S/F in the driving direction, 0..1.
     const fromSF = (pct) => (((dir * (pct - sfPct)) % 1) + 1) % 1;
-    turns = entry.normalizedTurns
+    turns = turnMarkers
       .map((tn) => ({ d: fromSF(pctOf(tn.x, tn.y)), p: t([tn.x, tn.y]) }))
       .sort((a, b) => a.d - b.d)
       .map((tn, i) => ({ label: String(i + 1), x: tn.p[0], y: tn.p[1] }));
@@ -554,6 +564,14 @@ async function main() {
   // retries failed relative specifiers with a `.js` suffix lets it load; it's
   // registered here (before the dynamic import) so it only affects this path —
   // --rebake never imports the package.
+  //
+  // `node:module`'s `registerHooks` doesn't exist before Node 22. It's imported
+  // dynamically (rather than as a static top-level import) so that merely
+  // *loading* this script on Node 20 — e.g. the CI job's --offline/cookie paths,
+  // which never reach this branch — doesn't throw a SyntaxError before any code
+  // runs. This legacy username/password login path itself still requires a
+  // newer Node; only the module load is guarded.
+  const { registerHooks } = await import("node:module");
   registerHooks({
     resolve(specifier, context, nextResolve) {
       try {
