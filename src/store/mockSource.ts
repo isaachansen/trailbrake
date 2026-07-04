@@ -196,7 +196,14 @@ function seedFastHistory(target: TelemetryStore): void {
   target.latestFast = samples[samples.length - 1] ?? null;
 }
 
-export function startBrowserMock(target: TelemetryStore = store): () => void {
+export function startBrowserMock(
+  target: TelemetryStore = store,
+  // Gallery/dev-only: lets the widget screenshot script force a specific
+  // irsdk_Flags bitfield (e.g. to capture the Flag widget's RED/CHECKERED/etc
+  // states) without inventing a whole scenario store for it. Unused in the real
+  // app and the manager preview, where it's always undefined.
+  opts?: { flagsRawOverride?: number }
+): () => void {
   target.setCaps({
     clutch: true,
     steeringAngle: true,
@@ -388,7 +395,7 @@ export function startBrowserMock(target: TelemetryStore = store): () => void {
       trackTurns: TRACK_TURNS,
       trackMetadata: null,
       // Weather.
-      flagsRaw: 0x40, // blue flag (faster car behind — let them pass)
+      flagsRaw: opts?.flagsRawOverride ?? 0x40, // blue flag (faster car behind — let them pass)
       airTempC: 22,
       trackTempC: 31,
       windSpeedMs: 3.5,

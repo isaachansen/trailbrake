@@ -42,7 +42,7 @@ interface FlagInfo {
 const PRIORITY: FlagInfo[] = [
   { bits: F_RED, name: "RED", color: "#ff495e" },
   { bits: F_CHECKERED, name: "CHECKERED", color: "#eef1f5", checker: true },
-  { bits: F_BLACK, name: "BLACK", color: "#15151c", border: "#ff495e" },
+  { bits: F_BLACK, name: "BLACK", color: "#15151c", border: "#eef1f5" },
   { bits: F_ANY_YELLOW, name: "YELLOW", color: "#ffb43d" },
   { bits: F_DEBRIS, name: "DEBRIS", color: "#ff8a3d" },
   { bits: F_WHITE, name: "WHITE", color: "#eef1f5" },

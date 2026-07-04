@@ -279,10 +279,13 @@ function startLaunchAssistScenario(target: TelemetryStore): () => void {
   return () => window.clearInterval(fastTimer);
 }
 
-/** Start feeding the preview store(s) with mock telemetry. Returns a stop function. */
-export function startPreviewMock(): () => void {
+/** Start feeding the preview store(s) with mock telemetry. Returns a stop function.
+ * `flagsRawOverride` is a gallery/dev-only passthrough (see mockSource.ts) that
+ * lets the widget screenshot script force a specific flag state; the manager's
+ * real preview never passes it. */
+export function startPreviewMock(opts?: { flagsRawOverride?: number }): () => void {
   const stops = [
-    startBrowserMock(previewStore),
+    startBrowserMock(previewStore, opts),
     startRejoinScenario(scenarioStores["rejoin-indicator"]),
     startLaunchAssistScenario(scenarioStores["launch-assist"]),
   ];

@@ -13,6 +13,9 @@
 //   scale=<n>                      → widget font/density multiplier (instance `scale`)
 //   opacity=<0..1>                 → panel opacity (instance `opacity`)
 //   config=<json>                  → JSON object merged over the widget's defaultConfig
+//   flags=<n>                      → dev-only: force slow.flagsRaw to this irsdk_Flags
+//                                    bitfield (decimal or 0x-hex), for capturing the
+//                                    Flag widget's individual states
 //
 // The capture script (`scripts/shoot-widgets.mjs`) reads `window.__WIDGETS__`
 // for the registry list and screenshots the element marked `data-widget-shot`.
@@ -250,6 +253,11 @@ export default function WidgetGallery() {
   } catch {
     configOverride = undefined;
   }
+  // Dev-only: `flags=0x10` (or decimal) forces slow.flagsRaw so the capture
+  // script can screenshot each Flag widget state individually — the mock
+  // otherwise always reports a fixed blue flag. Accepts 0x-hex or decimal.
+  const flagsParam = params.get("flags");
+  const flagsRawOverride = flagsParam != null ? Number(flagsParam) : undefined;
 
   const [ready, setReady] = useState(false);
 
@@ -265,7 +273,7 @@ export default function WidgetGallery() {
     const prev = targets.map((el) => el?.style.overflow ?? "");
     targets.forEach((el) => el && (el.style.overflow = "visible"));
 
-    const stop = startPreviewMock();
+    const stop = startPreviewMock({ flagsRawOverride });
     (window as unknown as { __WIDGETS__: unknown }).__WIDGETS__ = allWidgetDefs().map((d) => ({
       id: d.id,
       name: d.name,

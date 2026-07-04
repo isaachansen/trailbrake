@@ -38,10 +38,18 @@ export function WidgetPreview({ def, maxW, maxH, config, opacity = 1, widgetScal
   const { w, h } = def.defaultSize;
   const fit = Math.min(maxW / w, maxH / h, 1);
   const cfg = config ?? (def.defaultConfig as Record<string, unknown>);
-  // Some widgets paint no panel of their own (e.g. Spotter in screen-edges-only
-  // mode) — match the overlay and drop the glass chrome so the preview shows just
-  // the effect, not an empty box.
-  const transparent = def.transparentPanel?.(cfg) ?? false;
+  // `transparentPanel` widgets don't all mean the same thing. Spotter always
+  // self-paints its own full panel chrome, in every context, so dropping the
+  // host/preview box for it shows just its effect, never an empty one — safe to
+  // trust `transparentPanel` unconditionally. Flag only self-paints when truly
+  // live (`!editing && !preview` in Flag.tsx); in this preview `preview` is
+  // always true, so Flag paints nothing of its own and expects the *surrounding*
+  // chrome to supply the panel — exactly what WidgetHost does for it in edit
+  // mode. Only suppress chrome here for widgets confirmed to self-paint
+  // unconditionally; default to painting chrome so a future transparentPanel
+  // widget doesn't silently lose its box.
+  const SELF_PAINTS_OWN_CHROME_IN_PREVIEW = new Set(["spotter"]);
+  const transparent = (def.transparentPanel?.(cfg) ?? false) && SELF_PAINTS_OWN_CHROME_IN_PREVIEW.has(def.id);
   // Call unconditionally — hooks must never be skipped by a short-circuit branch
   // (a transparent-panel widget still needs this hook to run every render).
   const panelStyle = useSettings().panelStyle;
