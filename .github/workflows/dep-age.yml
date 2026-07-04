@@ -1,0 +1,27 @@
+# Supply-chain gate: any change to the dependency manifests must pass the
+# 14-day publish-age audit (scripts/check-dep-age.mjs). Catches young —
+# i.e. potentially worm-compromised — versions even when someone bypasses
+# `npm run add` and edits the lockfile with raw npm commands.
+name: Dependency age check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - package.json
+      - package-lock.json
+  pull_request:
+    paths:
+      - package.json
+      - package-lock.json
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # No npm install needed — the script is dependency-free by design.
+      - run: node scripts/check-dep-age.mjs

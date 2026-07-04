@@ -10,6 +10,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "add": "node scripts/safe-add.mjs",
+    "check-deps": "node scripts/check-dep-age.mjs",
     "set-version": "node scripts/set-version.mjs",
     "shoot-widgets": "node scripts/shoot-widgets.mjs",
     "fetch-track-maps": "node scripts/fetch-track-maps.mjs",
@@ -32,7 +34,7 @@
     "@vitejs/plugin-react": "^4.3.3",
     "iracing-api": "^0.5.2",
     "jimp": "^0.22.12",
-    "playwright-core": "^1.61.0",
+    "playwright-core": "1.61.0",
     "svg-path-properties": "^2.0.2",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
