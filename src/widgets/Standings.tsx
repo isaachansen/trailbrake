@@ -12,7 +12,7 @@ import { flagOf, parseLicense, classColorMap, classColorOf } from "./raceColors"
 import { LicenseBadge } from "./LicenseBadge";
 import { TyreBadge } from "./TyreBadge";
 import { PitBadge } from "./PitBadge";
-import { CarIcon, carIconFor, iracingIcon, isWideIcon } from "./carIcons";
+import { CarIcon, carIconFor, iracingIcon } from "./carIcons";
 import type { CarEntry } from "../store/types";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 import type { Theme } from "../theme/theme";
@@ -348,9 +348,8 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
     });
   if (has.car)
     cols.push({
-      // Round badges use the same 1.5em as the Relative rows; the wide, low-profile
-      // logos (Chevy/Ford/Dallara/McLaren) get the larger 1.63em tier so they
-      // don't read small.
+      // Same 1.5em base as the Relative rows; CarIcon applies its own
+      // per-brand calibration so wordmarks/wide logos don't read small.
       id: "car", w: "2em", head: "", align: "c",
       cell: (x) => {
         // Known make → brand badge; unknown → generic iRacing badge (the column
@@ -358,7 +357,7 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
         const ic = carIconFor(x.car.carScreenName) ?? iracingIcon;
         return (
           <span style={{ display: "flex", justifyContent: "center", alignItems: "center" }}>
-            <CarIcon src={ic} color={x.isPlayer ? "#fff" : t.text} size={isWideIcon(ic) ? "1.63em" : "1.5em"} />
+            <CarIcon src={ic} color={x.isPlayer ? "#fff" : t.text} size="1.5em" />
           </span>
         );
       },

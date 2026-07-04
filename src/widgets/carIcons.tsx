@@ -89,38 +89,46 @@ export function carIconFor(name: string | null | undefined): string | null {
 /** Generic iRacing badge — the explicit fallback for cars with no brand match. */
 export const iracingIcon = iracing;
 
-// Wide, low-profile logos (wordmarks, the Chevy bowtie, the Ford oval) fit to
-// the box *width* under `contain`, so in a square box they end up short and read
-// small next to the round badges. We render those in a wider box (same height,
-// so rows aren't disturbed) — the icon then scales up and overflows symmetrically
-// into the column gap. The number is the width multiple of the square size.
-const WIDTH_SCALE: Record<string, number> = {
-  [chevrolet]: 1.7,
-  [ford]: 1.6,
-  [dallara]: 1.9,
-  [mclaren]: 1.4,
-  [kia]: 1.55,
-  [superFormulaLights]: 1.8,
-  [iracing]: 1.7,
+// Equal-visual-weight calibration. `mask-size: contain` fits each SVG's own
+// viewBox into its box, so two icons at the identical box size can read very
+// differently: round/square badges (BMW, Mercedes) fill their box on every
+// side, but a horizontal wordmark crammed into a square viewBox (Aston
+// Martin, Audi) or a wide, tightly-cropped logo (Chevy bowtie, Ford oval,
+// McLaren swoosh) end up small and thin at the same nominal size. The goal
+// here is not equal box geometry — it's equal *perceived* size: wordmarks and
+// low, wide marks get a wider box (bleeds symmetrically into the column gap,
+// same as before) and, for icons padded inside a square canvas, a taller box
+// too (capped so a row never clips). `w`/`h` are multipliers on the caller's
+// base `size`; omitted icons default to `{ w: 1, h: 1 }`.
+const ICON_CAL: Record<string, { w: number; h: number }> = {
+  [astonmartin]: { w: 1.15, h: 1.15 },
+  [audi]: { w: 1.15, h: 1.15 },
+  [cadillac]: { w: 1.15, h: 1.15 },
+  [dallara]: { w: 1.3, h: 1 },
+  [chevrolet]: { w: 1.85, h: 1 },
+  [ferrari]: { w: 1.15, h: 1.15 },
+  [ford]: { w: 1.8, h: 1 },
+  [iracing]: { w: 1.35, h: 1 },
+  [kia]: { w: 1.5, h: 1 },
+  [lamborghini]: { w: 1.15, h: 1.15 },
+  [lexus]: { w: 1.1, h: 1 },
+  [mclaren]: { w: 1.6, h: 1.1 },
+  [pontiac]: { w: 1, h: 1.05 },
+  [porsche]: { w: 1.15, h: 1.15 },
+  [radical]: { w: 1.1, h: 1 },
+  [renault]: { w: 1.05, h: 1.05 },
+  [superFormula]: { w: 1.1, h: 1.05 },
+  [superFormulaLights]: { w: 1.8, h: 1 },
 };
-
-// The wide, low-profile logos. They read small at the round-badge size, so the
-// widgets render them one size tier larger (see each widget's icon cell).
-const WIDE = new Set<string>([chevrolet, ford, dallara, mclaren, kia, superFormulaLights, iracing]);
-export function isWideIcon(src: string): boolean {
-  return WIDE.has(src);
-}
-
-/** The McLaren badge URL, exported so a widget can size it on its own. */
-export const mclarenIcon = mclaren;
 
 /** A monochrome manufacturer badge, masked and tinted to `color`. */
 export function CarIcon({ src, color, size = "1.5em" }: { src: string; color: string; size?: string }) {
-  const k = WIDTH_SCALE[src] ?? 1;
+  const cal = ICON_CAL[src] ?? { w: 1, h: 1 };
   const m = /^([\d.]+)(\D*)$/.exec(size);
   const n = m ? parseFloat(m[1]) : 1.5;
   const unit = (m && m[2]) || "em";
-  const width = `${(n * k).toFixed(3)}${unit}`;
+  const width = `${(n * cal.w).toFixed(3)}${unit}`;
+  const height = `${(n * cal.h).toFixed(3)}${unit}`;
   return (
     <span
       aria-hidden
@@ -128,7 +136,7 @@ export function CarIcon({ src, color, size = "1.5em" }: { src: string; color: st
         display: "inline-block",
         verticalAlign: "middle",
         width,
-        height: size,
+        height,
         background: color,
         WebkitMaskImage: `url(${src})`,
         maskImage: `url(${src})`,

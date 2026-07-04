@@ -20,7 +20,7 @@ import { flagOf, parseLicense, classColorMap, classColorOf } from "./raceColors"
 import { LicenseBadge } from "./LicenseBadge";
 import { TyreBadge } from "./TyreBadge";
 import { PitBadge } from "./PitBadge";
-import { CarIcon, carIconFor, iracingIcon, isWideIcon } from "./carIcons";
+import { CarIcon, carIconFor, iracingIcon } from "./carIcons";
 import type { CarEntry, SlowSample } from "../store/types";
 import { classifySessionType } from "./contract";
 import type { BaseWidgetProps, InfoFieldConfig, SessionType, WidgetDefinition } from "./contract";
@@ -347,7 +347,7 @@ function RelativeRow({ car, slot, exiting, isPlayer, pos, provisional, gap, inPi
         <span style={{ justifySelf: "center", display: "flex", alignItems: "center", justifyContent: "center" }}>
           {(() => {
             const ic = carIconFor(car.carScreenName) ?? iracingIcon;
-            return <CarIcon src={ic} color={isPlayer ? "#fff" : t.text} size={isWideIcon(ic) ? "1.63em" : "1.5em"} />;
+            return <CarIcon src={ic} color={isPlayer ? "#fff" : t.text} size="1.5em" />;
           })()}
         </span>
       )}
@@ -524,22 +524,67 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
   const carDataRef = useRef<Map<number, CarEntry>>(new Map());
   visible.forEach((c) => carDataRef.current.set(c.carIdx, c));
 
-  // Gain/loss flash: detected from the *unwindowed* order (`ordered`), so a
-  // resize-driven change to the visible window never fires a false "you passed
-  // someone" — only a real swap in track-time order does.
+  // Gain/loss flash: a flash means the user actually *witnessed* a swap, so it
+  // only fires for a pairwise inversion between two cars that are BOTH visible
+  // right now and were BOTH visible (and ranked) last tick — i.e. two rows the
+  // user could see trade places on screen. This is deliberately narrower than
+  // "rank changed in the unwindowed order": that alone can't tell a real
+  // visible swap from a car joining/leaving `ordered` (tow, gap going null)
+  // shifting every index below it, or an off-screen swap between cars outside
+  // the window. Rank is still taken from the unwindowed `ordered` list (so the
+  // *direction* of a swap is correct even if the window trims differently),
+  // but the swap only lights up when both participants are in `visible`.
+  //
+  // Requiring both cars in the *previous* visible set too (not just ranked)
+  // means a car sliding into the window while passing someone already visible
+  // won't flash the newcomer (it wasn't on screen a moment ago to be "seen"
+  // arriving) — the visible car it passed also won't flash since its partner
+  // in the inversion wasn't previously visible. This trades a rare legitimate
+  // case for a strong guarantee against phantom flashes on window churn.
   const rankRef = useRef<Map<number, number>>(new Map());
+  const prevVisibleRef = useRef<Set<number>>(new Set());
   const highlightsRef = useRef<Map<number, HighlightEvent>>(new Map());
   const hlIdRef = useRef(0);
   {
     const rankMap = new Map(ordered.map((c, i) => [c.carIdx, i]));
-    for (const [carIdx, rank] of rankMap) {
-      const prevRank = rankRef.current.get(carIdx);
-      if (prevRank != null && prevRank !== rank) {
+    const prevRanks = rankRef.current;
+    const prevVisible = prevVisibleRef.current;
+    const curVisible = new Set(visible.map((c) => c.carIdx));
+    // Only cars that were visible last tick AND are visible this tick AND had
+    // a known rank both times are eligible to participate in a witnessed swap.
+    const eligible = visible.filter((c) => prevVisible.has(c.carIdx) && prevRanks.has(c.carIdx));
+    for (let i = 0; i < eligible.length; i++) {
+      for (let j = i + 1; j < eligible.length; j++) {
+        const a = eligible[i];
+        const b = eligible[j];
+        const prevA = prevRanks.get(a.carIdx)!;
+        const prevB = prevRanks.get(b.carIdx)!;
+        const curA = rankMap.get(a.carIdx)!;
+        const curB = rankMap.get(b.carIdx)!;
+        const wasAhead = prevA - prevB;
+        const isAhead = curA - curB;
+        if (wasAhead === 0 || isAhead === 0) continue; // shouldn't happen (ranks unique) but guard anyway
+        if (Math.sign(wasAhead) === Math.sign(isAhead)) continue; // no inversion
         hlIdRef.current += 1;
-        highlightsRef.current.set(carIdx, { id: hlIdRef.current, kind: rank < prevRank ? "gain" : "loss" });
+        const gainer = curA < curB ? a : b;
+        const loser = gainer === a ? b : a;
+        highlightsRef.current.set(gainer.carIdx, { id: hlIdRef.current, kind: "gain" });
+        hlIdRef.current += 1;
+        highlightsRef.current.set(loser.carIdx, { id: hlIdRef.current, kind: "loss" });
       }
     }
+    // Expire: prune any highlight whose car isn't visible right now, so a car
+    // that scrolls out of the window and later scrolls back in can never
+    // replay a stale event (the bug this whole rewrite fixes). A highlight
+    // for a car that stays visible the whole time is harmless to leave in
+    // place — `PositionFlash` keys its fade effect on `event.id`, so once it
+    // has faded to transparent it stays that way until a *new* id (a fresh
+    // witnessed swap) arrives; it never re-plays on its own.
+    for (const carIdx of highlightsRef.current.keys()) {
+      if (!curVisible.has(carIdx)) highlightsRef.current.delete(carIdx);
+    }
     rankRef.current = rankMap;
+    prevVisibleRef.current = curVisible;
   }
 
   const has = {
