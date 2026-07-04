@@ -854,6 +854,28 @@ fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir.join("app-settings.json"))
 }
 
+/// One-time migration for the identifier rename (`com.simoverlay.dev` →
+/// `com.trailbrake.app`): the app-config dir is derived from the identifier, so
+/// existing installs would otherwise come up with empty layouts/settings after
+/// updating. Any config file that exists under the old identifier's dir but not
+/// the new one is copied across on startup (copied, not moved, so rolling back
+/// to an older build still finds its data).
+fn migrate_legacy_config(app: &AppHandle) {
+    let Ok(new_dir) = app.path().app_config_dir() else { return };
+    let Some(old_dir) = new_dir.parent().map(|p| p.join("com.simoverlay.dev")) else { return };
+    if !old_dir.is_dir() {
+        return;
+    }
+    for name in ["overlay-config.json", "app-settings.json"] {
+        let src = old_dir.join(name);
+        let dst = new_dir.join(name);
+        if src.is_file() && !dst.is_file() {
+            let _ = std::fs::create_dir_all(&new_dir);
+            let _ = std::fs::copy(&src, &dst);
+        }
+    }
+}
+
 #[tauri::command]
 fn load_overlay_config(app: AppHandle) -> Option<String> {
     let path = config_path(&app).ok()?;
@@ -1071,6 +1093,10 @@ fn main() {
         .manage(vr::VrState::default())
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // Must run before anything reads config/settings (the frontend asks
+            // for them as soon as the manager window loads).
+            migrate_legacy_config(&handle);
 
             // Overlay starts hidden + click-through, parked on a secondary monitor.
             if let Some(win) = app.get_webview_window("overlay") {
