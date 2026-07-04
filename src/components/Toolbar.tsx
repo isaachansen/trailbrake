@@ -25,6 +25,10 @@ export function Toolbar({ theme, active, profiles, carName, boundProfile }: Prop
     padding: "3px 6px",
     fontSize: 12,
   };
+  // Native <option> popups are OS/webview-painted and don't inherit this
+  // toolbar's own background — give them an explicit opaque dark fill so the
+  // open list stays legible against the system default (audit 4d).
+  const optionStyle: React.CSSProperties = { background: "#14151b", color: theme.colors.text };
   const btn: React.CSSProperties = {
     background: "transparent",
     border: `1px solid ${theme.colors.edit}`,
@@ -33,6 +37,12 @@ export function Toolbar({ theme, active, profiles, carName, boundProfile }: Prop
     padding: "3px 8px",
     fontSize: 12,
     cursor: "pointer",
+  };
+  const groupLabel: React.CSSProperties = {
+    color: theme.colors.textDim,
+    font: `600 10.5px ${theme.font.label}`,
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
   };
 
   return (
@@ -43,20 +53,25 @@ export function Toolbar({ theme, active, profiles, carName, boundProfile }: Prop
         left: 8,
         display: "flex",
         alignItems: "center",
-        gap: 8,
-        padding: "6px 10px",
-        background: "rgba(10,12,16,0.92)",
+        gap: theme.space.md,
+        padding: `${theme.space.sm}px ${theme.space.md}px`,
+        // Same glass surface every widget panel uses, instead of a bespoke flat
+        // near-black (audit 4a).
+        background: theme.colors.surface,
+        backdropFilter: theme.panelBlur,
+        WebkitBackdropFilter: theme.panelBlur,
         border: `1px solid ${theme.colors.surfaceBorder}`,
         borderRadius: theme.radius,
+        boxShadow: theme.panelShadow,
         font: `600 12px ${theme.font.family}`,
         color: theme.colors.text,
         pointerEvents: "auto",
       }}
     >
-      <span style={{ color: theme.colors.textDim }}>Profile</span>
+      <span style={groupLabel}>Profile</span>
       <select value={active} onChange={(e) => layoutStore.setActive(e.target.value)} style={selectStyle}>
         {profiles.map((p) => (
-          <option key={p} value={p}>{p}</option>
+          <option key={p} value={p} style={optionStyle}>{p}</option>
         ))}
       </select>
       <button style={btn} onClick={() => {
@@ -77,11 +92,11 @@ export function Toolbar({ theme, active, profiles, carName, boundProfile }: Prop
 
       <span style={{ width: 1, height: 18, background: theme.colors.surfaceBorder }} />
 
-      <span style={{ color: theme.colors.textDim }}>Add</span>
+      <span style={groupLabel}>Add</span>
       <select value="" onChange={(e) => { if (e.target.value) { layoutStore.addWidget(e.target.value); e.target.value = ""; } }} style={selectStyle}>
-        <option value="">widget…</option>
+        <option value="" style={optionStyle}>widget…</option>
         {allWidgetDefs().map((d) => (
-          <option key={d.id} value={d.id}>{d.name}</option>
+          <option key={d.id} value={d.id} style={optionStyle}>{d.name}</option>
         ))}
       </select>
 

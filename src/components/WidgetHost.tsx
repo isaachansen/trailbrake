@@ -103,49 +103,122 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
 
   const Comp = def.Component;
 
+  // The edit-mode title/close bar used to live *inside* the panel's flex column,
+  // where its own rendered height ate into the content row's real height only
+  // while editing — FitContent then measured the shrunk box and scaled every
+  // widget down, so content visibly differed in and out of edit mode (issue 4e).
+  // It now renders as a separate, absolutely-positioned "chip" that floats above
+  // the panel's own bounds, so the panel (and therefore the content FitContent
+  // measures) is always exactly `instance.size.{w,h}` regardless of `editing`.
+  //
+  // Height accounting for the floating chip (so the clamp math below is exact):
+  // 18px remove button (its tallest child) + 4px top/bottom padding ×2 (8px) +
+  // 1px top/bottom border ×2 (2px) = 28px.
+  const EDIT_HEADER_H = 28;
+  const EDIT_HEADER_GAP = 4; // visual breathing room between the chip and the panel
+
   return (
-    <div
-      onPointerDown={editing ? () => layoutStore.select(instance.instanceId) : undefined}
-      style={{
-        position: "absolute",
-        left: instance.position.x,
-        top: instance.position.y,
-        width: instance.size.w,
-        height: instance.size.h,
-        fontSize: theme.font.sizeBase * eff.scale,
-        boxSizing: "border-box",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        pointerEvents: editing ? "auto" : "none",
-        // Panel surface: flat glass (default) or Liquid Glass.
-        ...(glass
-          ? glassChrome(panelAlpha)
-          : {
-              background: chromeless ? "transparent" : surfaceBg,
-              backdropFilter: chromeless ? "none" : theme.panelBlur,
-              WebkitBackdropFilter: chromeless ? "none" : theme.panelBlur,
-              borderRadius: theme.radius,
-            }),
-        border: editing
-          ? `1px ${selected ? "solid" : "dashed"} ${selected ? theme.colors.edit : theme.colors.surfaceBorder}`
-          : chromeless
-            ? "none"
-            : glass
-              ? GLASS_BORDER
-              : `1px solid ${theme.colors.surfaceBorder}`,
-        // The selection ring only belongs in edit mode — never leave it on a widget
-        // after "Done editing".
-        boxShadow: editing && selected
-          ? `${chromeless ? "none" : glass ? GLASS_SHADOW : theme.panelShadow}, 0 0 0 1px ${theme.colors.edit}`
-          : chromeless
-            ? "none"
-            : glass
-              ? GLASS_SHADOW
-              : theme.panelShadow,
-      }}
-    >
-      {glass && <GlassSpecular />}
+    <>
+      <div
+        onPointerDown={editing ? () => layoutStore.select(instance.instanceId) : undefined}
+        style={{
+          position: "absolute",
+          left: instance.position.x,
+          top: instance.position.y,
+          width: instance.size.w,
+          height: instance.size.h,
+          fontSize: theme.font.sizeBase * eff.scale,
+          boxSizing: "border-box",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          pointerEvents: editing ? "auto" : "none",
+          // Panel surface: flat glass (default) or Liquid Glass.
+          ...(glass
+            ? glassChrome(panelAlpha)
+            : {
+                background: chromeless ? "transparent" : surfaceBg,
+                backdropFilter: chromeless ? "none" : theme.panelBlur,
+                WebkitBackdropFilter: chromeless ? "none" : theme.panelBlur,
+                borderRadius: theme.radius,
+              }),
+          border: editing
+            ? `1px ${selected ? "solid" : "dashed"} ${selected ? theme.colors.edit : theme.colors.surfaceBorder}`
+            : chromeless
+              ? "none"
+              : glass
+                ? GLASS_BORDER
+                : `1px solid ${theme.colors.surfaceBorder}`,
+          // The selection ring only belongs in edit mode — never leave it on a widget
+          // after "Done editing".
+          boxShadow: editing && selected
+            ? `${chromeless ? "none" : glass ? GLASS_SHADOW : theme.panelShadow}, 0 0 0 1px ${theme.colors.edit}`
+            : chromeless
+              ? "none"
+              : glass
+                ? GLASS_SHADOW
+                : theme.panelShadow,
+        }}
+      >
+        {glass && <GlassSpecular />}
+
+        <div style={{ position: "relative", zIndex: 1, flex: 1, minHeight: 0 }}>
+        {unsupported ? (
+          <div
+            style={{
+              width: "100%",
+              height: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              textAlign: "center",
+              padding: 8,
+              boxSizing: "border-box",
+              color: theme.colors.textDim,
+              fontSize: 11,
+            }}
+          >
+            Unavailable — this sim doesn't provide: {missingCaps.join(", ")}
+          </div>
+        ) : (
+          <FitContent>
+            {(size) => <Comp theme={theme} config={instance.config as any} caps={caps} size={size} />}
+          </FitContent>
+        )}
+        </div>
+
+        {editing && !instance.locked && (
+          <div
+            onPointerDown={beginResize}
+            onPointerMove={onMove}
+            onPointerUp={endDrag}
+            onPointerCancel={cancelDrag}
+            onLostPointerCapture={cancelDrag}
+            title="resize"
+            style={{
+              position: "absolute",
+              right: 0,
+              bottom: 0,
+              width: 20,
+              height: 20,
+              cursor: "nwse-resize",
+              // Above the content layer (which sits at zIndex 1 over the glass
+              // specular) so the handle is actually grabbable, not covered.
+              zIndex: 2,
+              background: `linear-gradient(135deg, transparent 55%, ${selected ? theme.colors.edit : theme.colors.surfaceBorder} 55%)`,
+            }}
+          />
+        )}
+      </div>
+
+      {/* Floating title/close chip — a sibling of the panel, NOT a child, so it
+          never reserves space inside it (see the 4e note above). Positioned in
+          the same coordinate space as the panel (both are absolute against
+          `.overlay-root`), just above the panel's top edge. Clamped to 0 when
+          the widget sits at (or near) the very top of the overlay, in which
+          case it overlaps the panel's own top edge by up to EDIT_HEADER_H — a
+          visual-only tradeoff (chrome painted over a sliver of content); it
+          never changes the panel's box or what FitContent measures. */}
       {editing && (
         <div
           onPointerDown={beginMove}
@@ -154,17 +227,28 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
           onPointerCancel={cancelDrag}
           onLostPointerCapture={cancelDrag}
           style={{
+            position: "absolute",
+            left: instance.position.x,
+            top: Math.max(0, instance.position.y - EDIT_HEADER_H - EDIT_HEADER_GAP),
+            width: instance.size.w,
+            boxSizing: "border-box",
             display: "flex",
             alignItems: "center",
-            gap: 6,
-            padding: "3px 8px",
-            fontSize: 11,
-            fontWeight: 600,
-            letterSpacing: 0.4,
+            gap: theme.space.sm,
+            padding: `${theme.space.xs}px ${theme.space.sm}px`,
+            font: `600 11px ${theme.font.label}`,
+            textTransform: "uppercase",
+            letterSpacing: "0.06em",
             color: selected ? theme.colors.edit : theme.colors.textDim,
-            background: "rgba(0,0,0,0.4)",
+            background: theme.colors.surface,
+            backdropFilter: theme.panelBlur,
+            WebkitBackdropFilter: theme.panelBlur,
+            border: `1px solid ${selected ? theme.colors.edit : theme.colors.surfaceBorder}`,
+            borderRadius: theme.radius / 2,
+            boxShadow: theme.panelShadow,
             cursor: instance.locked ? "not-allowed" : "move",
-            flex: "0 0 auto",
+            pointerEvents: "auto",
+            transition: "color 120ms ease, border-color 120ms ease",
           }}
         >
           <span>⠿</span>
@@ -194,66 +278,19 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
               display: "grid",
               placeItems: "center",
               border: "none",
-              borderRadius: 4,
+              borderRadius: theme.radius / 4,
               background: "transparent",
               color: theme.colors.textDim,
               cursor: "pointer",
               font: `700 12px ${theme.font.family}`,
               lineHeight: 1,
+              transition: "color 120ms ease, background 120ms ease",
             }}
           >
             ✕
           </button>
         </div>
       )}
-
-      <div style={{ position: "relative", zIndex: 1, flex: 1, minHeight: 0 }}>
-        {unsupported ? (
-          <div
-            style={{
-              width: "100%",
-              height: "100%",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              textAlign: "center",
-              padding: 8,
-              boxSizing: "border-box",
-              color: theme.colors.textDim,
-              fontSize: 11,
-            }}
-          >
-            Unavailable — this sim doesn't provide: {missingCaps.join(", ")}
-          </div>
-        ) : (
-          <FitContent>
-            {(size) => <Comp theme={theme} config={instance.config as any} caps={caps} size={size} />}
-          </FitContent>
-        )}
-      </div>
-
-      {editing && !instance.locked && (
-        <div
-          onPointerDown={beginResize}
-          onPointerMove={onMove}
-          onPointerUp={endDrag}
-          onPointerCancel={cancelDrag}
-          onLostPointerCapture={cancelDrag}
-          title="resize"
-          style={{
-            position: "absolute",
-            right: 0,
-            bottom: 0,
-            width: 20,
-            height: 20,
-            cursor: "nwse-resize",
-            // Above the content layer (which sits at zIndex 1 over the glass
-            // specular) so the handle is actually grabbable, not covered.
-            zIndex: 2,
-            background: `linear-gradient(135deg, transparent 55%, ${selected ? theme.colors.edit : theme.colors.surfaceBorder} 55%)`,
-          }}
-        />
-      )}
-    </div>
+    </>
   );
 }

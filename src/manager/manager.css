@@ -160,6 +160,25 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  /* Issue 4c: raises this bar within the manager's own stacking order (in case
+   * anything inside `.mgr` ever overlaps it). NOTE — this does NOT make the
+   * real Edit/"Done editing" button win against the browser dev shell's
+   * overlay preview (`.dev-overlay-layer`, z-index 40, in BrowserDevShell.tsx):
+   * `.mgr` itself is `position: fixed`, which unconditionally opens its own
+   * stacking context, so no z-index inside `.mgr` can out-rank a sibling
+   * stacking context. Verified empirically (Playwright): a widget positioned
+   * over this bar still swallows the click even with this rule in place. The
+   * actual guaranteed exit is the on-overlay "✓ Done editing" button
+   * (OverlayApp.tsx) — it lives inside the same window that owns the
+   * captured cursor while editing and paints after every widget, so nothing
+   * can occlude or disable it, in the dev shell or the real app. A real fix
+   * for the *manager's own* button in the dev shell needs a portal (moving
+   * this bar's DOM node out of `.mgr`'s subtree) — left as a follow-up since
+   * it's dev-tooling-only and doesn't affect the shipped app (manager and
+   * overlay are separate native windows there, so this collision can't
+   * happen — see issue 4b's hit-region narrowing for that path instead). */
+  position: relative;
+  z-index: 50;
 }
 
 .mgr-content {

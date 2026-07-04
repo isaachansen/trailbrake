@@ -25,8 +25,17 @@ export function SettingsPanel({ instance, theme }: Props) {
   // the current appearance and jump the moment you touched a slider.
   const eff = layoutStore.getEffective(instance);
 
-  const labelStyle: React.CSSProperties = { color: theme.colors.textDim, fontSize: 11, flex: "0 0 96px" };
-  const rowStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, minHeight: 24 };
+  // Eyebrow/label styling matches the family convention (Saira SemiCondensed,
+  // uppercase, tracked out) instead of the ambient body font every row used to
+  // fall back to (audit 4a).
+  const labelStyle: React.CSSProperties = {
+    color: theme.colors.textDim,
+    font: `600 10.5px ${theme.font.label}`,
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+    flex: "0 0 96px",
+  };
+  const rowStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: theme.space.md, minHeight: 24 };
 
   const num = (key: string, value: number, f: Extract<ConfigField, { type: "number" }>) => (
     <div style={rowStyle} key={key}>
@@ -77,8 +86,8 @@ export function SettingsPanel({ instance, theme }: Props) {
       color: active ? theme.colors.text : theme.colors.textDim,
     });
     return (
-      <div key={f.key} style={{ marginTop: 6 }}>
-        <span style={{ ...labelStyle, flex: "none", display: "block", marginBottom: 4 }}>{f.label}</span>
+      <div key={f.key} style={{ marginTop: theme.space.sm }}>
+        <span style={{ ...labelStyle, flex: "none", display: "block", marginBottom: theme.space.xs }}>{f.label}</span>
         {rows.map((r, i) => (
           <div key={r.key} style={{ display: "flex", alignItems: "center", gap: 6, minHeight: 22 }}>
             <span style={{ display: "flex", flexDirection: "column", lineHeight: 0.8 }}>
@@ -167,10 +176,15 @@ export function SettingsPanel({ instance, theme }: Props) {
         top: 44,
         right: 8,
         width: 232,
-        padding: 10,
-        background: "rgba(10,12,16,0.92)",
+        padding: theme.space.md,
+        // Same glass-surface language as every widget panel, instead of a
+        // bespoke flat near-black (audit 4a).
+        background: theme.colors.surface,
+        backdropFilter: theme.panelBlur,
+        WebkitBackdropFilter: theme.panelBlur,
         border: `1px solid ${theme.colors.surfaceBorder}`,
         borderRadius: theme.radius,
+        boxShadow: theme.panelShadow,
         color: theme.colors.text,
         font: `500 12px ${theme.font.family}`,
         pointerEvents: "auto",
@@ -178,8 +192,10 @@ export function SettingsPanel({ instance, theme }: Props) {
         overflowY: "auto",
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <strong style={{ color: theme.colors.edit }}>{def.name}</strong>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: theme.space.md }}>
+        <strong style={{ color: theme.colors.edit, font: `700 13px ${theme.font.label}`, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+          {def.name}
+        </strong>
         <button onClick={() => layoutStore.removeWidget(instance.instanceId)} style={btn(theme.colors.loss)}>
           Remove
         </button>
@@ -250,10 +266,11 @@ export function SettingsPanel({ instance, theme }: Props) {
         <span style={{ width: 34, textAlign: "right" }}>{(instance.vrDepth ?? 0).toFixed(2)}</span>
       </div>
 
-      <div style={{ borderTop: `1px solid ${theme.colors.surfaceBorder}`, margin: "8px 0" }} />
+      <div style={{ borderTop: `1px solid ${theme.colors.surfaceBorder}`, margin: `${theme.space.md}px 0` }} />
 
       {/* Widget-specific schema */}
       {def.configSchema.map((f) => {
+        if (f.visibleWhen && !f.visibleWhen(instance.config)) return null;
         const value = instance.config[f.key];
         if (f.type === "boolean") {
           return (
@@ -273,22 +290,42 @@ export function SettingsPanel({ instance, theme }: Props) {
           <div style={rowStyle} key={f.key}>
             <span style={labelStyle}>{f.label}</span>
             <select value={String(value)} onChange={(e) => layoutStore.updateConfig(instance.instanceId, { [f.key]: e.target.value })}
-              style={{ flex: 1, background: "rgba(255,255,255,0.06)", color: theme.colors.text, border: `1px solid ${theme.colors.surfaceBorder}`, borderRadius: 4, padding: "2px 4px" }}>
+              style={selectStyle(theme)}>
               {f.options.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
+                // Native <option> popups are painted by the OS/webview, not this
+                // panel's own backdrop — without an explicit opaque background +
+                // color they fall back to system defaults, which read poorly
+                // against this dark theme (audit 4d). An opaque near-black (not
+                // the panel's translucent `surface` token) matches what the OS
+                // actually renders for the option list.
+                <option key={o.value} value={o.value} style={{ background: "#14151b", color: theme.colors.text }}>
+                  {o.label}
+                </option>
               ))}
             </select>
           </div>
         );
       })}
 
-      <div style={{ marginTop: 8 }}>
+      <div style={{ marginTop: theme.space.md }}>
         <button onClick={() => layoutStore.resetConfig(instance.instanceId)} style={btn(theme.colors.textDim)}>
           Reset options
         </button>
       </div>
     </div>
   );
+}
+
+function selectStyle(theme: Theme): React.CSSProperties {
+  return {
+    flex: 1,
+    background: "rgba(255,255,255,0.06)",
+    color: theme.colors.text,
+    border: `1px solid ${theme.colors.surfaceBorder}`,
+    borderRadius: 4,
+    padding: "2px 4px",
+    font: `500 12px ${theme.font.family}`,
+  };
 }
 
 function btn(color: string): React.CSSProperties {
