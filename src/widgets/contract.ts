@@ -66,7 +66,7 @@ export function reconcileFieldList(
 }
 
 /** A single configurable option, rendered generically by the settings panel. */
-export type ConfigField =
+export type ConfigField = (
   | { key: string; label: string; type: "boolean" }
   | { key: string; label: string; type: "number"; min: number; max: number; step: number }
   | { key: string; label: string; type: "enum"; options: { value: string; label: string }[] }
@@ -82,7 +82,17 @@ export type ConfigField =
    * session-type visibility. `fields` is the catalog of selectable entries (in
    * a sensible default order); the stored value is an `InfoFieldConfig[]`.
    */
-  | { key: string; label: string; type: "fieldList"; fields: { key: string; label: string }[] };
+  | { key: string; label: string; type: "fieldList"; fields: { key: string; label: string }[] }
+) & {
+  /**
+   * When present and returning false for the current config, the settings
+   * panels skip rendering this field (e.g. a slider that only appears when a
+   * sibling enum is set to "custom"). Pure function of the config object —
+   * must be defensive about missing keys, since saved layouts can predate the
+   * field this predicate guards.
+   */
+  visibleWhen?: (config: Record<string, unknown>) => boolean;
+};
 
 /** Props every widget receives. Widget-specific options live in `config`. */
 export interface BaseWidgetProps<C = Record<string, unknown>> {

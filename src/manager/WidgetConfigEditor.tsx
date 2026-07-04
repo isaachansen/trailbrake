@@ -146,6 +146,7 @@ export function WidgetConfigEditor({ instance }: Props) {
       </GeneralRow>
 
       {def.configSchema.map((f) => {
+        if (f.visibleWhen && !f.visibleWhen(instance.config)) return null;
         const value = instance.config[f.key];
         if (f.type === "boolean") {
           return (

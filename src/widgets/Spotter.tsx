@@ -25,17 +25,57 @@ import { useSettings } from "../store/appSettings";
 import { glassChrome, GlassSpecular } from "../components/liquidGlass";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 import type { Theme } from "../theme/theme";
+import { hexToRgba } from "./format";
 
 export type SpotterDisplay = "both" | "widget" | "edges";
+export type SpotterEdgeIntensity = "subtle" | "standard" | "bold" | "custom";
 
 export interface SpotterConfig {
   /** Longitudinal window (m) within which a neighbour counts as alongside. */
   alongsideM: number;
   /** What to show: the widget panel, the screen-edge glow, or both. */
   display: SpotterDisplay;
+  /**
+   * Multiplier on the screen-edge glow's driven opacity (both the live pulse
+   * and the gallery preview demo share this one knob). "standard" is the
+   * tuned default; "subtle" dims it further for drivers who find it
+   * distracting, "bold" pushes it back up for max peripheral visibility;
+   * "custom" uses `edgeCustomPct` instead of a preset.
+   */
+  edgeIntensity: SpotterEdgeIntensity;
+  /** Edge glow color (`#rrggbb`); feeds the gradients in place of the old hardcoded red. */
+  edgeColor: string;
+  /** How far the edge glow reaches inward, as a % of screen width. */
+  edgeWidthPct: number;
+  /** Intensity multiplier (%) used only when `edgeIntensity === "custom"`. */
+  edgeCustomPct: number;
 }
 
-const defaultConfig: SpotterConfig = { alongsideM: 3, display: "both" };
+const defaultConfig: SpotterConfig = {
+  alongsideM: 3,
+  display: "both",
+  edgeIntensity: "standard",
+  edgeColor: "#ff1e2e",
+  edgeWidthPct: 6,
+  edgeCustomPct: 100,
+};
+
+// Multiplier applied to the edge overlays' driven opacity — one mechanism
+// scales both the live pulse and the preview demo. Output is clamped to 1.
+// "custom" isn't in this map — it's resolved from `edgeCustomPct` at the call
+// sites instead of a fixed preset.
+const EDGE_INTENSITY_MULT: Record<Exclude<SpotterEdgeIntensity, "custom">, number> = {
+  subtle: 0.65,
+  standard: 1,
+  bold: 1.45,
+};
+
+/** Resolve the edge intensity multiplier for the current config, custom included. */
+function edgeIntensityMult(config: SpotterConfig): number {
+  const mode = config.edgeIntensity ?? "standard";
+  if (mode === "custom") return (config.edgeCustomPct ?? 100) / 100;
+  return EDGE_INTENSITY_MULT[mode] ?? 1;
+}
 
 function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
   const t = theme.colors;
@@ -72,6 +112,7 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
       // widget bars and/or the screen-edge glow visibly show what the widget does
       // (especially in edges-only mode, where there's no panel to look at).
       if (preview) {
+        const intensityMult = edgeIntensityMult(config);
         const period = 2600; // one full right→left cycle (ms)
         const phase = (now % period) / period;
         // Smooth 0→1→0 bump over an active window; the two sides alternate with a
@@ -86,8 +127,8 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
         if (leftRef.current) leftRef.current.style.opacity = l.toFixed(3);
         if (rightRef.current) rightRef.current.style.opacity = r.toFixed(3);
         if (wideRef.current) wideRef.current.style.display = "none";
-        if (edgeLeftRef.current) edgeLeftRef.current.style.opacity = (0.95 * l).toFixed(3);
-        if (edgeRightRef.current) edgeRightRef.current.style.opacity = (0.95 * r).toFixed(3);
+        if (edgeLeftRef.current) edgeLeftRef.current.style.opacity = Math.min(1, 0.95 * l * intensityMult).toFixed(3);
+        if (edgeRightRef.current) edgeRightRef.current.style.opacity = Math.min(1, 0.95 * r * intensityMult).toFixed(3);
         // Keep the panel visible in preview so the widget is actually shown.
         if (panelRef.current) {
           panelRef.current.style.opacity = "1";
@@ -139,10 +180,14 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
       }
       setCaption(captionRef.current, warnL, warnR, t);
 
-      // Screen-edge glow. Pulse it (~2 Hz, 0.72..1.0) when active so it grabs
-      // peripheral attention while the driver is focused on the track — a steady
-      // fade was too easy to miss mid-corner.
-      const pulse = (0.72 + 0.28 * (0.5 + 0.5 * Math.sin(now / 230))).toFixed(3);
+      // Screen-edge glow. Pulse it (~2 Hz, 0.6..1.0) when active so it grabs
+      // peripheral attention while the driver is focused on the track — motion
+      // contrast is what peripheral vision actually keys on, not raw
+      // brightness, so a deep pulse over a thin, edge-hugging band reads as
+      // "noticeable" without occluding the region where the car alongside
+      // actually is. `edgeIntensity` scales the whole driven opacity.
+      const intensityMult = edgeIntensityMult(config);
+      const pulse = Math.min(1, (0.6 + 0.4 * (0.5 + 0.5 * Math.sin(now / 230))) * intensityMult).toFixed(3);
       if (edgeLeftRef.current) edgeLeftRef.current.style.opacity = warnL ? pulse : "0";
       if (edgeRightRef.current) edgeRightRef.current.style.opacity = warnR ? pulse : "0";
 
@@ -189,21 +234,29 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
     position: "absolute",
     top: 0,
     bottom: 0,
-    width: "14%",
+    width: `${config.edgeWidthPct ?? 6}%`,
     pointerEvents: "none",
     opacity: 0,
     transition: "opacity 0.08s ease",
   };
   const leftPos: React.CSSProperties = flank ? { right: "100%" } : { left: 0 };
   const rightPos: React.CSSProperties = flank ? { left: "100%" } : { right: 0 };
-  // Brighter, 3-stop gradient with a strong near-edge band so it reads clearly in
-  // peripheral vision (the old single-stop 0.32 fade was too faint mid-race).
+  // Thin, edge-hugging band with a fast falloff: peripheral vision keys on
+  // luminance MOTION (the pulse), not on raw brightness or how much of the
+  // screen is painted — a wide, mostly-opaque band just occludes the exact
+  // spot where the car alongside / mirror / apex actually is, which is
+  // self-defeating for a spotter. Concentrate color hard against the screen
+  // edge and let the inner two-thirds of the band stay genuinely see-through;
+  // `edgeIntensity` (subtle/standard/bold/custom) scales the whole driven
+  // opacity, `edgeColor` picks the hue, and `edgeWidthPct` (above) controls
+  // how far inward the band reaches — all user-tunable, same alpha structure.
+  const edgeColor = config.edgeColor ?? "#ff1e2e";
   const leftBg = flank
-    ? "linear-gradient(to left, rgba(255,30,46,0.6), rgba(255,30,46,0))"
-    : "linear-gradient(to right, rgba(255,30,46,0.72), rgba(255,30,46,0.32) 45%, rgba(255,30,46,0))";
+    ? `linear-gradient(to left, ${hexToRgba(edgeColor, 0.45)}, ${hexToRgba(edgeColor, 0)})`
+    : `linear-gradient(to right, ${hexToRgba(edgeColor, 0.45)}, ${hexToRgba(edgeColor, 0.15)} 35%, ${hexToRgba(edgeColor, 0)})`;
   const rightBg = flank
-    ? "linear-gradient(to right, rgba(255,30,46,0.6), rgba(255,30,46,0))"
-    : "linear-gradient(to left, rgba(255,30,46,0.72), rgba(255,30,46,0.32) 45%, rgba(255,30,46,0))";
+    ? `linear-gradient(to right, ${hexToRgba(edgeColor, 0.45)}, ${hexToRgba(edgeColor, 0)})`
+    : `linear-gradient(to left, ${hexToRgba(edgeColor, 0.45)}, ${hexToRgba(edgeColor, 0.15)} 35%, ${hexToRgba(edgeColor, 0)})`;
 
   return (
     <>
@@ -336,6 +389,40 @@ export const spotterDef: WidgetDefinition<SpotterConfig> = {
         { value: "edges", label: "Screen edges only" },
       ],
     },
+    {
+      key: "edgeIntensity",
+      label: "Edge glow intensity",
+      type: "enum",
+      options: [
+        { value: "subtle", label: "Subtle" },
+        { value: "standard", label: "Standard" },
+        { value: "bold", label: "Bold" },
+        { value: "custom", label: "Custom" },
+      ],
+    },
+    {
+      key: "edgeCustomPct",
+      label: "Custom intensity (%)",
+      type: "number",
+      min: 10,
+      max: 150,
+      step: 5,
+      visibleWhen: (c) => (c.edgeIntensity ?? "standard") === "custom",
+    },
+    {
+      key: "edgeColor",
+      label: "Edge glow color",
+      type: "color",
+      presets: [
+        { hex: "#ff1e2e", name: "Alert red" },
+        { hex: "#ffb43d", name: "Amber" },
+        { hex: "#ff2d8e", name: "Pink" },
+        { hex: "#37d4ea", name: "Cyan" },
+        { hex: "#2fe08a", name: "Green" },
+        { hex: "#ffffff", name: "White" },
+      ],
+    },
+    { key: "edgeWidthPct", label: "Edge reach (%)", type: "number", min: 3, max: 20, step: 1 },
   ],
   // The host never draws a panel for the Spotter: in edges-only mode there's no
   // panel at all, and in widget/both mode the widget draws its own auto-hiding
