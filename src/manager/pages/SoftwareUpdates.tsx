@@ -1,74 +1,15 @@
 // "Software updates" settings card: a manual Check-for-updates button that, when
 // a newer version is published, downloads + installs it in place and relaunches.
-// All the moving parts live in store/updater.ts; this is just the UI around them.
+// The state machine lives in store/updateFlow.ts (shared with the startup toast
+// in manager/UpdateToast.tsx); this is just the UI around it.
 
-import { useSyncExternalStore } from "react";
 import { Field } from "../ui";
 import { isTauri } from "../../store/transport";
-import {
-  applyUpdate,
-  checkForUpdate,
-  updatesSupported,
-  type DownloadProgress,
-  type UpdateInfo,
-} from "../../store/updater";
-
-type Phase = "idle" | "checking" | "available" | "downloading" | "uptodate" | "error";
-
-interface UpdateFlowState {
-  phase: Phase;
-  info: UpdateInfo | null;
-  progress: DownloadProgress | null;
-  error: string;
-}
-
-// Hoisted to module scope (not component state): the Settings page can be
-// navigated away from and back to mid-check/mid-download, and this is the
-// single source of truth so that doesn't look like the flow silently reset.
-// It also means a second `check()`/`install()` can't stomp on one already in
-// flight — callers below check `state.phase` before starting either.
-const updateFlow: UpdateFlowState = { phase: "idle", info: null, progress: null, error: "" };
-const listeners = new Set<() => void>();
-
-function setUpdateFlow(patch: Partial<UpdateFlowState>) {
-  Object.assign(updateFlow, patch);
-  listeners.forEach((l) => l());
-}
-
-function subscribe(l: () => void): () => void {
-  listeners.add(l);
-  return () => listeners.delete(l);
-}
-
-function getSnapshot(): UpdateFlowState {
-  return updateFlow;
-}
-
-async function check() {
-  if (updateFlow.phase === "checking" || updateFlow.phase === "downloading") return;
-  setUpdateFlow({ phase: "checking", error: "" });
-  try {
-    const found = await checkForUpdate();
-    if (found) setUpdateFlow({ info: found, phase: "available" });
-    else setUpdateFlow({ phase: "uptodate" });
-  } catch (e) {
-    setUpdateFlow({ error: e instanceof Error ? e.message : String(e), phase: "error" });
-  }
-}
-
-async function install() {
-  if (updateFlow.phase === "downloading") return;
-  setUpdateFlow({ phase: "downloading", error: "", progress: null });
-  try {
-    // On success the app relaunches and this call never returns.
-    await applyUpdate((p) => setUpdateFlow({ progress: p }));
-  } catch (e) {
-    setUpdateFlow({ error: e instanceof Error ? e.message : String(e), phase: "error" });
-  }
-}
+import { updatesSupported } from "../../store/updater";
+import { check, install, setUpdateFlow, useUpdateFlow } from "../../store/updateFlow";
 
 export function SoftwareUpdates() {
-  const { phase, info, progress, error } = useSyncExternalStore(subscribe, getSnapshot);
+  const { phase, info, progress, error } = useUpdateFlow();
 
   // No Tauri runtime (browser dev shell) → nothing to update.
   if (!updatesSupported()) {

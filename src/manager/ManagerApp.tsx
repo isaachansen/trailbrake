@@ -15,6 +15,7 @@ import { NavRail, TopBar, type Page } from "./shell";
 import { WidgetsPage } from "./pages/WidgetsPage";
 import { ProfilesPage } from "./pages/ProfilesPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { UpdateToast } from "./UpdateToast";
 
 export default function ManagerApp() {
   const [page, setPage] = useState<Page>("widgets");
@@ -48,6 +49,7 @@ export default function ManagerApp() {
           {page === "settings" && <SettingsPage />}
         </main>
       </div>
+      <UpdateToast />
     </div>
   );
 }
