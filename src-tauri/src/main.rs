@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 use overlay_core::{
     spawn_reader, MockConnector, ReplayConnector, SimConnector, TelemetrySnapshot,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
@@ -79,6 +79,36 @@ struct OverlayState {
     /// watchdog, hotkey, manager commands) can't interleave a stale show/hide
     /// over a fresh one.
     reconcile: Mutex<()>,
+    /// Click-through hit-testing while editing (issue 4b): the overlay window
+    /// ignores cursor events by default even in edit mode, and the cursor-poll
+    /// thread (`spawn_cursor_poll`) flips capture on only while the OS cursor is
+    /// over one of these logical, window-relative rects — reported live by the
+    /// frontend (`src/store/hitRegions.ts`) for every element that opts into
+    /// native capture. Empty/ignored whenever we're not editing.
+    hit_regions: Mutex<Vec<HitRect>>,
+    /// True while a pointer gesture (drag/resize) is in progress in the webview.
+    /// Forces full cursor capture regardless of hover position, so a drag that
+    /// carries the cursor outside the widget's original rect (via
+    /// `setPointerCapture`) never gets stranded by the window suddenly ignoring
+    /// cursor events mid-gesture.
+    force_capture: AtomicBool,
+}
+
+/// A logical, window-relative rectangle reported by the frontend for hit-testing
+/// clicks while editing (issue 4b). Coordinates are CSS pixels in the overlay
+/// window's own viewport (`.overlay-root` exactly coincides with it).
+#[derive(Clone, Copy, Deserialize)]
+struct HitRect {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+impl HitRect {
+    fn contains(&self, x: f64, y: f64) -> bool {
+        x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h
+    }
 }
 
 impl OverlayState {
@@ -522,12 +552,93 @@ fn reconcile_overlay(app: &AppHandle) {
         } else {
             let _ = win.hide();
         }
-        // editing => capture the cursor; otherwise click-through.
-        let _ = win.set_ignore_cursor_events(!editing);
+        // Baseline is always click-through. While editing, `spawn_cursor_poll`
+        // dynamically flips capture on/off as the cursor enters/leaves a widget
+        // rect (issue 4b) — this call just re-establishes the click-through
+        // baseline on every reconcile (edit toggling off, visibility changes,
+        // preview, VR, …), which is correct because the poll thread no-ops
+        // entirely whenever `editing` is false.
+        let _ = win.set_ignore_cursor_events(true);
+    }
+
+    if !editing {
+        // Hygiene: drop stale hit-test state so a late-arriving report from a
+        // just-exited edit session can't leak into the next one.
+        if let Ok(mut regions) = st.hit_regions.lock() {
+            regions.clear();
+        }
+        st.force_capture.store(false, Ordering::SeqCst);
     }
 
     let _ = app.emit(EVT_EDIT_MODE, editing);
     emit_status(app);
+}
+
+/// Issue 4b (click-through to apps under the edit layer): while editing, the
+/// overlay window ignores cursor events by default (see `reconcile_overlay`)
+/// so clicks on empty space fall through to whatever app is under it. This
+/// background thread is what makes widgets/controls still clickable — every
+/// tick, while editing, it reads the OS cursor position and flips capture on
+/// only when the cursor is over a reported hit region (or a pointer gesture is
+/// in progress), then flips it back off the moment it leaves. An ignoring
+/// window receives no mouse events at all, so this has to be driven from the
+/// OS cursor position rather than DOM pointer events.
+const CURSOR_POLL_INTERVAL: Duration = Duration::from_millis(16);
+
+fn spawn_cursor_poll(app: AppHandle) {
+    std::thread::Builder::new()
+        .name("edit-cursor-poll".into())
+        .spawn(move || {
+            // Local — not shared state — so we only call into the window when our
+            // own last-applied capture state actually needs to change; tao/Windows
+            // additionally no-ops an unchanged flag, but avoiding the cross-thread
+            // call entirely when nothing changed keeps this thread cheap.
+            let mut capturing = false;
+            loop {
+                std::thread::sleep(CURSOR_POLL_INTERVAL);
+                let st = app.state::<OverlayState>();
+                if !st.edit.load(Ordering::SeqCst) {
+                    // Not editing: nothing to do. `reconcile_overlay` already owns
+                    // the click-through baseline for every other state.
+                    if capturing {
+                        capturing = false;
+                    }
+                    continue;
+                }
+                let Some(win) = app.get_webview_window("overlay") else {
+                    continue;
+                };
+
+                let want = if st.force_capture.load(Ordering::SeqCst) {
+                    // A drag/resize is in progress — stay captured for the whole
+                    // gesture regardless of hover position, so `setPointerCapture`
+                    // carrying the cursor outside the widget's original rect never
+                    // strands the drag (an ignoring window gets no pointermove/up).
+                    true
+                } else {
+                    match (win.cursor_position(), win.inner_position(), win.scale_factor()) {
+                        (Ok(cursor), Ok(origin), Ok(scale)) if scale > 0.0 => {
+                            // Convert the OS cursor's physical position into the
+                            // overlay's logical (CSS-pixel) coordinate space, which
+                            // is what the reported hit rects use.
+                            let lx = (cursor.x - origin.x as f64) / scale;
+                            let ly = (cursor.y - origin.y as f64) / scale;
+                            st.hit_regions
+                                .lock()
+                                .map(|regions| regions.iter().any(|r| r.contains(lx, ly)))
+                                .unwrap_or(false)
+                        }
+                        _ => false,
+                    }
+                };
+
+                if want != capturing {
+                    let _ = win.set_ignore_cursor_events(!want);
+                    capturing = want;
+                }
+            }
+        })
+        .expect("failed to spawn edit-cursor-poll thread");
 }
 
 /// Flip the VR-active flag (so the overlay window stays rendered for capture) and
@@ -629,6 +740,26 @@ fn set_edit(app: AppHandle, editing: bool) {
     let st = app.state::<OverlayState>();
     st.edit.store(editing, Ordering::SeqCst);
     reconcile_overlay(&app);
+}
+
+/// Issue 4b (click-through to apps under the edit layer): the frontend
+/// (`src/store/hitRegions.ts`) calls this continuously while editing with the
+/// current set of on-screen interactive rects (widgets, toolbar, settings
+/// panel, the "Done editing" button — anything that opts into native capture),
+/// plus whether a pointer gesture is currently in progress. `spawn_cursor_poll`
+/// reads this state to decide, each tick, whether the overlay window should
+/// currently be capturing the cursor. Ignored while not editing so a stray
+/// report from a just-exited session can't resurrect capture.
+#[tauri::command]
+fn report_hit_regions(app: AppHandle, regions: Vec<HitRect>, force_capture: bool) {
+    let st = app.state::<OverlayState>();
+    if !st.edit.load(Ordering::SeqCst) {
+        return;
+    }
+    if let Ok(mut r) = st.hit_regions.lock() {
+        *r = regions;
+    }
+    st.force_capture.store(force_capture, Ordering::SeqCst);
 }
 
 /// Preview = "keep the overlay on screen even outside a session". Independent of
@@ -907,6 +1038,7 @@ fn main() {
             load_app_settings,
             save_app_settings,
             set_edit,
+            report_hit_regions,
             set_preview,
             set_auto_show,
             set_edit_hotkey,
@@ -933,6 +1065,8 @@ fn main() {
             ),
             launch_manager_resolved: AtomicBool::new(false),
             reconcile: Mutex::new(()),
+            hit_regions: Mutex::new(Vec::new()),
+            force_capture: AtomicBool::new(false),
         })
         .manage(vr::VrState::default())
         .setup(|app| {
@@ -973,6 +1107,7 @@ fn main() {
             });
 
             spawn_bridge(handle);
+            spawn_cursor_poll(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {

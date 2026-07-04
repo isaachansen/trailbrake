@@ -7,6 +7,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { defaultTheme } from "./theme/theme";
 import { initTransport, isTauri } from "./store/transport";
 import { editModeStore } from "./store/editMode";
+import { startHitRegionReporting } from "./store/hitRegions";
 import { controls, type VrWidgetLayout } from "./store/controls";
 import { useCaps, useSlow } from "./store/hooks";
 import { useVrStatus, useStatus } from "./store/session";
@@ -86,6 +87,17 @@ export default function OverlayApp() {
   // settings panel lingers in race mode.
   useEffect(() => {
     if (!editing) layoutStore.select(null);
+  }, [editing]);
+
+  // Issue 4b: while editing, the overlay window ignores cursor events by
+  // default (native click-through to whatever's behind it on the monitor) —
+  // this reports the live set of on-screen interactive rects so the backend's
+  // cursor-poll thread can flip capture on only over widgets/controls. See
+  // src/store/hitRegions.ts for the mechanism; no-op outside Tauri.
+  const overlayRootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!editing || !overlayRootRef.current) return;
+    return startHitRegionReporting(overlayRootRef.current);
   }, [editing]);
 
   // Start the data transport and load the saved layout once.
@@ -184,6 +196,7 @@ export default function OverlayApp() {
 
   return (
     <div
+      ref={overlayRootRef}
       className="overlay-root"
       // The surface itself never captures clicks — only the widgets (in edit mode)
       // and the on-overlay controls do, via their own pointer-events. This keeps
@@ -230,8 +243,12 @@ export default function OverlayApp() {
       {editing && selected && <SettingsPanel instance={selected} theme={theme} />}
 
       {editing && (
-        <div style={{ position: "absolute", bottom: 8, left: 8, display: "flex", alignItems: "center", gap: 10, pointerEvents: "none" }}>
-          {/* Clickable way out of edit mode, for when you don't want the hotkey. */}
+        <div style={{ position: "absolute", bottom: theme.space.md, left: theme.space.md, display: "flex", alignItems: "center", gap: theme.space.md, pointerEvents: "none" }}>
+          {/* The guaranteed way out of edit mode: this button lives inside the
+              overlay window that owns the captured cursor while editing, and
+              paints last (after every widget), so nothing in-window can cover
+              or disable it — see issue 4c. Sized and colored to read as *the*
+              obvious exit, not a minor debug affordance (issue 4a). */}
           <button
             onClick={() => void controls.setEdit(false)}
             title="Stop editing (also: edit-mode hotkey)"
@@ -240,26 +257,30 @@ export default function OverlayApp() {
               cursor: "pointer",
               display: "inline-flex",
               alignItems: "center",
-              gap: 6,
-              padding: "6px 14px",
+              gap: theme.space.sm,
+              padding: "9px 18px",
               background: theme.colors.accent,
               color: "#0a0b0e",
               border: "none",
               borderRadius: theme.radius,
-              font: `700 12px ${theme.font.family}`,
-              letterSpacing: "0.04em",
-              boxShadow: theme.panelShadow,
+              font: `700 13px ${theme.font.label}`,
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+              boxShadow: `${theme.panelShadow}, 0 0 0 1px rgba(255,255,255,0.14)`,
             }}
           >
             ✓ Done editing
           </button>
           <span
             style={{
-              padding: "4px 10px",
-              background: "rgba(0,0,0,0.55)",
+              padding: `${theme.space.xs}px ${theme.space.md}px`,
+              background: theme.colors.surface,
+              backdropFilter: theme.panelBlur,
+              WebkitBackdropFilter: theme.panelBlur,
               border: `1px solid ${theme.colors.surfaceBorder}`,
               borderRadius: theme.radius,
-              font: `600 11px ${theme.font.family}`,
+              font: `600 11px ${theme.font.label}`,
+              letterSpacing: "0.02em",
               color: theme.colors.textDim,
             }}
           >
