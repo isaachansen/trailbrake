@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import { settingsStore, useSettings, DEFAULT_SETTINGS } from "../../store/appSettings";
 import { useStatus, useVrStatus } from "../../store/session";
-import { controls, type MonitorInfo, type VrBackendKind } from "../../store/controls";
+import { controls, type LmuPluginStatus, type MonitorInfo, type VrBackendKind } from "../../store/controls";
 import { isTauri } from "../../store/transport";
 import { layoutStore, useLayout } from "../../store/layout";
 import { SESSION_STATES } from "../../store/sessionState";
@@ -50,11 +50,47 @@ export function SettingsPage() {
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
   const [wheelOpen, setWheelOpen] = useState(false);
   const [vrError, setVrError] = useState<string | null>(null);
+  const [lmuStatus, setLmuStatus] = useState<LmuPluginStatus | undefined>(undefined);
+  const [lmuLoading, setLmuLoading] = useState(true);
+  const [lmuBusy, setLmuBusy] = useState(false);
+  const [lmuError, setLmuError] = useState<string | null>(null);
+  // Snapshot of `reduceGpu` as loaded, so we can tell the user to restart only
+  // once they've actually changed it this session (the flag itself is applied
+  // once at process start and won't reflect a mid-session toggle either way).
+  const [reduceGpuAtLoad] = useState(() => settings.reduceGpu);
 
   useEffect(() => {
     void controls.listMonitors().then(setMonitors);
     void controls.vrStatus();
   }, []);
+
+  const refreshLmuStatus = () => {
+    setLmuLoading(true);
+    void controls
+      .lmuPluginStatus()
+      .then(setLmuStatus)
+      .finally(() => setLmuLoading(false));
+  };
+
+  useEffect(refreshLmuStatus, []);
+
+  // Lazily import the process plugin (same pattern as the updater's
+  // post-install relaunch in store/updater.ts) rather than a static import,
+  // so it's only ever touched from behind the `isTauri()` gate.
+  const relaunch = () => import("@tauri-apps/plugin-process").then((m) => m.relaunch());
+
+  const enableLmuPlugin = () => {
+    setLmuBusy(true);
+    setLmuError(null);
+    void controls
+      .lmuEnablePlugin()
+      .then((s) => setLmuStatus(s))
+      .catch((e: unknown) => {
+        const msg = typeof e === "string" ? e : e instanceof Error ? e.message : "Couldn't enable the plugin.";
+        setLmuError(msg);
+      })
+      .finally(() => setLmuBusy(false));
+  };
 
   // Apply a new accelerator and surface a registration failure (e.g. the chord
   // is already bound elsewhere) inline instead of swallowing it.
@@ -127,6 +163,22 @@ export function SettingsPage() {
             <Toggle on={settings.previewMock} onChange={(v) => settingsStore.setPreviewMock(v)} />
           </div>
         </Field>
+        {isTauri() && (
+          <Field label="Reduce GPU usage">
+            <div className="row" style={{ flex: 1, justifyContent: "space-between" }}>
+              <span className="hint">
+                Renders overlay graphics on the CPU to free the GPU for the game. Recommended if the game stutters. Requires a restart.
+              </span>
+              <Toggle on={settings.reduceGpu} onChange={(v) => settingsStore.setReduceGpu(v)} />
+            </div>
+            {settings.reduceGpu !== reduceGpuAtLoad && (
+              <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+                <span className="hint" style={{ color: "var(--warn)" }}>⚠ Restart Trailbrake to apply.</span>
+                <button className="btn btn-sm" onClick={() => void relaunch()}>Restart now</button>
+              </div>
+            )}
+          </Field>
+        )}
       </div>
 
       <div className="card">
@@ -368,6 +420,73 @@ export function SettingsPage() {
           Per-widget depth (nearer/farther) is on each widget's settings card in edit mode. Tip: OpenXR overlay
           compositing isn't supported by current runtimes, so VR runs on OpenVR/SteamVR.
         </p>
+      </div>
+
+      <div className="card">
+        <div className="card-title">Sim integration</div>
+        <p className="card-desc">Per-sim setup Trailbrake needs in order to read telemetry.</p>
+
+        <span className="field-label">Le Mans Ultimate</span>
+        <p className="hint" style={{ marginTop: 4 }}>
+          Trailbrake reads Le Mans Ultimate through the rF2 Shared Memory Map Plugin. It's required — without it,
+          LMU won't be detected.
+        </p>
+
+        {lmuLoading ? (
+          <p className="hint">Checking…</p>
+        ) : lmuStatus === undefined ? (
+          <p className="hint">{isTauri() ? "Couldn't check the plugin status." : "Available in the desktop app."}</p>
+        ) : !lmuStatus.lmuFound ? (
+          <>
+            <p className="hint error">Couldn't find your Le Mans Ultimate install automatically.</p>
+            <p className="hint">
+              1. Download the plugin (or install CrewChief, which includes it).
+              <br />
+              2. Put rFactor2SharedMemoryMapPlugin64.dll into your LMU\Plugins folder.
+              <br />
+              3. Come back and click Re-check.
+            </p>
+            <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+              <button className="btn btn-ghost btn-sm" onClick={refreshLmuStatus}>Re-check</button>
+              <button className="btn btn-sm" onClick={() => void controls.lmuOpenDownloadPage()}>Get the plugin</button>
+            </div>
+          </>
+        ) : lmuStatus.dllPresent && lmuStatus.enabled ? (
+          <div className="row" style={{ justifyContent: "space-between", marginTop: 2 }}>
+            <span className="hint" style={{ color: "var(--good)" }}>✓ Plugin installed and enabled.</span>
+            <button className="btn btn-ghost btn-sm" onClick={refreshLmuStatus}>Re-check</button>
+          </div>
+        ) : lmuStatus.dllPresent ? (
+          <>
+            <p className="hint">Plugin installed but not enabled.</p>
+            {lmuError && <p className="hint error">⚠ {lmuError}</p>}
+            <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+              <button className="btn btn-ghost btn-sm" onClick={refreshLmuStatus} disabled={lmuBusy}>Re-check</button>
+              <button className="btn btn-primary btn-sm" onClick={enableLmuPlugin} disabled={lmuBusy}>
+                {lmuBusy ? "Enabling…" : "Enable plugin"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="hint">Plugin not installed.</p>
+            <p className="hint">
+              1. Download the plugin (or install CrewChief, which includes it).
+              <br />
+              2. Put rFactor2SharedMemoryMapPlugin64.dll into your LMU\Plugins folder.
+              <br />
+              3. Come back and click Enable plugin.
+            </p>
+            {lmuStatus.pluginsDir && (
+              <p className="hint muted" style={{ fontFamily: "var(--mono, monospace)" }}>{lmuStatus.pluginsDir}</p>
+            )}
+            <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+              <button className="btn btn-ghost btn-sm" onClick={refreshLmuStatus}>Re-check</button>
+              <button className="btn btn-sm" onClick={() => void controls.lmuOpenPluginsFolder()}>Open Plugins folder</button>
+              <button className="btn btn-sm" onClick={() => void controls.lmuOpenDownloadPage()}>Get the plugin</button>
+            </div>
+          </>
+        )}
       </div>
 
       <SoftwareUpdates />

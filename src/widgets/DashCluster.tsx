@@ -11,11 +11,14 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
 import { useSettings } from "../store/appSettings";
+import { isLiveOverlayWindow } from "../store/windowKind";
 import { useCarName } from "./useCarName";
 import { speedValue, speedLabel } from "./format";
 import { resolveCarLeds, gearLeds } from "./carLeds";
 import { GEAR_COLOR_PRESETS } from "./raceColors";
+import { useRafDraw } from "./useRafDraw";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
+import type { FastSample } from "../store/types";
 
 export interface DashClusterConfig {
   /** Fallback redline (RPM) used when the live car has no shift-light profile,
@@ -45,6 +48,27 @@ const LED_COUNT = 16;
 /** Window (s) shown by the mini input trace. */
 const INPUT_WINDOW = 5;
 
+/**
+ * Whether the shift-light strip is currently in its at-redline flash state —
+ * mirrors the two branches in the draw loop below. The flash toggles purely
+ * off wall-clock time (`performance.now()`), not new telemetry, so dirty-skip
+ * must never suppress frames while this is true or the flash would freeze.
+ */
+function dashIsFlashing(
+  fast: FastSample | null,
+  config: DashClusterConfig,
+  profile: ReturnType<typeof resolveCarLeds>
+): boolean {
+  const rpm = fast?.rpm ?? 0;
+  if (profile) {
+    const g = gearLeds(profile, fast?.gear ?? null);
+    const redline = g?.redline ?? config.redlineRpm;
+    return rpm >= redline;
+  }
+  const rpmPct = Math.max(0, Math.min(1, rpm / config.redlineRpm));
+  return rpmPct > 0.97;
+}
+
 function DashCluster({ theme, config, caps, size }: BaseWidgetProps<DashClusterConfig>) {
   const store = useStoreInstance();
   const t = theme.colors;
@@ -72,6 +96,17 @@ function DashCluster({ theme, config, caps, size }: BaseWidgetProps<DashClusterC
   const live = useRef({ config, units, profile, ledCount });
   live.current = { config, units, profile, ledCount };
 
+  // Dirty-skip: redraws are driven by `fast` (gear/speed/rpm/steering/history)
+  // plus `config`/`units`/`profile` (LED thresholds, gear color, speed units).
+  // The at-redline flash (see `dashIsFlashing`) toggles on wall-clock time
+  // alone, so it's carved out separately — never skipped while active, or the
+  // flash would visibly freeze. `undefined`-initialized refs guarantee the
+  // first frame always paints.
+  const lastFastRef = useRef<FastSample | null | undefined>(undefined);
+  const lastConfigRef = useRef<DashClusterConfig | undefined>(undefined);
+  const lastUnitsRef = useRef<typeof units | undefined>(undefined);
+  const lastProfileRef = useRef<typeof profile | undefined>(undefined);
+
   // Cache the input-trace canvas's CSS size via ResizeObserver instead of
   // calling getBoundingClientRect() every animation frame (that forces a layout
   // read at 60fps). Re-observes when the canvas mounts/unmounts with showInputs.
@@ -89,10 +124,13 @@ function DashCluster({ theme, config, caps, size }: BaseWidgetProps<DashClusterC
     return () => ro.disconnect();
   }, [config.showInputs]);
 
-  useEffect(() => {
-    let raf = 0;
-    const draw = () => {
+  useRafDraw(
+    () => {
       const { config, units, profile, ledCount } = live.current;
+      lastFastRef.current = store.latestFast;
+      lastConfigRef.current = config;
+      lastUnitsRef.current = units;
+      lastProfileRef.current = profile;
       const s = store.latestFast;
       if (s) {
         const gear = s.gear == null ? "N" : s.gear < 0 ? "R" : s.gear === 0 ? "N" : String(s.gear);
@@ -159,7 +197,10 @@ function DashCluster({ theme, config, caps, size }: BaseWidgetProps<DashClusterC
       if (ic) {
         const ctx = ic.getContext("2d");
         const { w: rw, h: rh } = inputSize.current;
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        // The live overlay composites over the game at 1:1 with the desktop,
+        // so a >1 backing-store resolution buys nothing there (see
+        // isLiveOverlayWindow's doc comment) — only GPU/memory cost.
+        const dpr = isLiveOverlayWindow() ? 1 : Math.min(window.devicePixelRatio || 1, 2);
         const W = Math.max(1, Math.round(rw * dpr));
         const H = Math.max(1, Math.round(rh * dpr));
         if (ic.width !== W || ic.height !== H) {
@@ -171,11 +212,21 @@ function DashCluster({ theme, config, caps, size }: BaseWidgetProps<DashClusterC
           drawTrace(ctx, rw, rh, store.history, store.latestFast, t.throttle, t.brake);
         }
       }
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [t.throttle, t.loss, t.accent, t.brake]);
+    },
+    {
+      shouldDraw: () => {
+        const { config, units, profile } = live.current;
+        return (
+          store.latestFast !== lastFastRef.current ||
+          config !== lastConfigRef.current ||
+          units !== lastUnitsRef.current ||
+          profile !== lastProfileRef.current ||
+          dashIsFlashing(store.latestFast, config, profile)
+        );
+      },
+    },
+    []
+  );
 
   const showSteering = config.showSteering && (caps?.steeringAngle ?? true);
   // The wheel + angle label are one centered flex column whose natural height

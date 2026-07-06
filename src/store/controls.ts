@@ -37,6 +37,15 @@ export interface VrWidgetLayout {
 
 export type VrBackendKind = "auto" | "openvr" | "openxr";
 
+/** Le Mans Ultimate's rF2 Shared Memory Map Plugin: install/enable status
+ *  (mirrors Rust `LmuPluginStatus`, camelCase). */
+export interface LmuPluginStatus {
+  lmuFound: boolean;
+  pluginsDir: string | null;
+  dllPresent: boolean;
+  enabled: boolean;
+}
+
 async function cmd<T = void>(name: string, args?: Record<string, unknown>): Promise<T | undefined> {
   if (!isTauri()) return undefined;
   const { invoke } = await import("@tauri-apps/api/core");
@@ -131,5 +140,27 @@ export const controls = {
     const s = await cmd<VrStatus>("vr_status");
     if (s) vrStatusStore.set(s);
     return s;
+  },
+
+  // --- LMU rF2 Shared Memory Map Plugin (guided, manual install) ---
+
+  /** Detect whether LMU is installed, and whether the plugin DLL is present
+   *  / enabled. `undefined` outside Tauri (desktop-only feature). */
+  async lmuPluginStatus(): Promise<LmuPluginStatus | undefined> {
+    return cmd<LmuPluginStatus>("lmu_plugin_status");
+  },
+
+  /** Flip the plugin's enabled flag in LMU's own config. Throws the backend's
+   *  message (e.g. DLL missing) on failure. */
+  async lmuEnablePlugin(): Promise<LmuPluginStatus | undefined> {
+    return cmd<LmuPluginStatus>("lmu_enable_plugin");
+  },
+
+  async lmuOpenPluginsFolder(): Promise<void> {
+    await cmd("lmu_open_plugins_folder");
+  },
+
+  async lmuOpenDownloadPage(): Promise<void> {
+    await cmd("lmu_open_download_page");
   },
 };

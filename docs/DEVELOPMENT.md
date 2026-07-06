@@ -14,7 +14,8 @@ crates/
                        #   reader loop + fan-out, MockConnector, record/replay
   iracing-connector/   # Windows-only: irsdk shared-memory reader → snapshot;
                        #   bundled track maps (track_map.rs + assets/track_maps.json)
-  lmu-connector/       # stubbed seam (Le Mans Ultimate / rFactor2) — not implemented
+  lmu-connector/       # Windows-only: rF2 shared-memory reader (Le Mans Ultimate) →
+                       #   snapshot. First listener: fast-path physics + basic session
   vr-overlay/          # opt-in VR compositor: per-widget OpenVR/OpenXR panels
                        #   (Windows + `vr` feature) — see docs/VR.md
   overlay-cli/         # dev harness: run a source, print normalized snapshots

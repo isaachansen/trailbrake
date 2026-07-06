@@ -149,6 +149,12 @@ export interface TrackMetadata {
   lovelyTurns: TrackTurnMarker[];
 }
 
+/**
+ * Sim-neutral flag state — mirrors the backend `FlagState` enum's snake_case
+ * serde names exactly (`crates/overlay-core/src/snapshot.rs`).
+ */
+export type FlagName = "none" | "green" | "yellow" | "blue" | "white" | "red" | "checkered" | "black" | "debris";
+
 export interface SlowSample {
   sim: string;
   trackName: string | null;
@@ -206,6 +212,12 @@ export interface SlowSample {
   // Weather.
   /** Raw session flag bitfield (sim-specific bits). */
   flagsRaw: number | null;
+  /**
+   * Sim-neutral decoded flag state, matching the backend `FlagState` enum's
+   * snake_case serde name (e.g. `"green"`, `"yellow"`, `"none"`). Prefer this
+   * over `flagsRaw` — it's the same across every sim/connector.
+   */
+  flag: FlagName;
   airTempC: number | null;
   trackTempC: number | null;
   /** Wind speed in m/s. */

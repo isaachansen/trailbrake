@@ -19,6 +19,7 @@ rust-version = "1.77"
 # Internal crates
 overlay-core = { path = "crates/overlay-core" }
 iracing-connector = { path = "crates/iracing-connector" }
+lmu-connector = { path = "crates/lmu-connector" }
 vr-overlay = { path = "crates/vr-overlay" }
 
 # Shared third-party deps (kept deliberately small for Phase 1)

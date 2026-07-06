@@ -19,6 +19,7 @@
 // touch the sim. (§3: decouple read from render, centralize, fast vs slow.)
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod lmu_plugin;
 mod track_maps;
 mod vr;
 
@@ -28,7 +29,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use overlay_core::{
-    spawn_reader, MockConnector, ReplayConnector, SimConnector, TelemetrySnapshot,
+    spawn_reader, Capabilities, FlagState, MockConnector, ReplayConnector, SimConnector,
+    TelemetrySnapshot,
 };
 use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -42,6 +44,17 @@ const EVT_SLOW: &str = "telemetry://slow";
 const EVT_CAPS: &str = "telemetry://caps";
 const EVT_EDIT_MODE: &str = "overlay://edit-mode";
 const EVT_STATUS: &str = "overlay://status";
+
+/// Cap on how often EVT_FAST is emitted to the webviews. LMU's rF2 physics
+/// reader runs ~90-100 Hz, vs iRacing's ~60 Hz — every reader frame was being
+/// forwarded as its own IPC message + JSON serialize, so LMU was paying
+/// ~50% more fast-path IPC/CPU than iRacing for no visible benefit (the
+/// rAF-driven fast widgets already cap their read rate at the display
+/// refresh rate). We throttle by *dropping* intermediate frames rather than
+/// queuing/delaying them, so the emitted payload is always the newest
+/// sample and the added worst-case latency is bounded by this interval. On
+/// iRacing (already ~60 Hz) this is a no-op.
+const FAST_EMIT_MIN_INTERVAL: Duration = Duration::from_millis(16);
 
 /// Default edit-mode hotkey if the user hasn't set one. `CmdOrCtrl` maps to
 /// Ctrl on Windows/Linux and Cmd on macOS.
@@ -241,6 +254,9 @@ struct SlowSample {
     track_metadata: Option<overlay_core::TrackMetadata>,
     // Weather.
     flags_raw: Option<u32>,
+    /// Sim-neutral decoded flag state (e.g. `"green"`, `"yellow"`, `"none"`).
+    /// Serialized as the `FlagState` enum's snake_case serde name.
+    flag: String,
     air_temp_c: Option<f32>,
     track_temp_c: Option<f32>,
     wind_speed_ms: Option<f32>,
@@ -326,6 +342,30 @@ struct CapsMsg {
     pit_info: bool,
 }
 
+impl From<Capabilities> for CapsMsg {
+    fn from(c: Capabilities) -> Self {
+        CapsMsg {
+            clutch: c.clutch,
+            steering_angle: c.steering_angle,
+            fuel: c.fuel,
+            deltas: c.deltas,
+            relative_gaps: c.relative_gaps,
+            irating: c.irating,
+            safety_rating: c.safety_rating,
+            multiclass: c.multiclass,
+            proximity: c.proximity,
+            track_map: c.track_map,
+            race_control: c.race_control,
+            chat: c.chat,
+            weather: c.weather,
+            sectors: c.sectors,
+            car_setup: c.car_setup,
+            spectator: c.spectator,
+            pit_info: c.pit_info,
+        }
+    }
+}
+
 fn fast_from(snap: &TelemetrySnapshot, reader_hz: f32) -> FastSample {
     let p = &snap.player;
     FastSample {
@@ -346,6 +386,24 @@ fn fast_from(snap: &TelemetrySnapshot, reader_hz: f32) -> FastSample {
         tc_active: p.tc_active,
         car_left: p.car_left,
         car_right: p.car_right,
+    }
+}
+
+/// The `FlagState` enum's serde (snake_case) name, matching what
+/// `#[derive(Serialize)] #[serde(rename_all = "snake_case")]` would emit —
+/// spelled out here so `SlowSample.flag` is a plain string in the webview
+/// payload instead of a nested JSON value.
+fn flag_state_str(flag: FlagState) -> &'static str {
+    match flag {
+        FlagState::None => "none",
+        FlagState::Green => "green",
+        FlagState::Yellow => "yellow",
+        FlagState::Blue => "blue",
+        FlagState::White => "white",
+        FlagState::Red => "red",
+        FlagState::Checkered => "checkered",
+        FlagState::Black => "black",
+        FlagState::Debris => "debris",
     }
 }
 
@@ -415,6 +473,7 @@ fn slow_from(snap: &TelemetrySnapshot) -> SlowSample {
         track_turns: s.track_turns.clone(),
         track_metadata: s.track_metadata.clone(),
         flags_raw: s.flags_raw,
+        flag: flag_state_str(s.flag).to_string(),
         air_temp_c: s.air_temp_c,
         track_temp_c: s.track_temp_c,
         wind_speed_ms: s.wind_speed_ms,
@@ -471,9 +530,82 @@ fn slow_from(snap: &TelemetrySnapshot) -> SlowSample {
     }
 }
 
-/// Pick the telemetry source. `OVERLAY_SOURCE=mock|iracing|replay|auto`
-/// (default auto). For replay, `OVERLAY_REPLAY` gives the JSONL path. iRacing is
-/// Windows-only; elsewhere we fall back to the mock.
+/// Auto-detecting telemetry source. On each `connect()` it probes every
+/// supported sim's connector in priority order and adopts the first whose shared
+/// memory is present, then delegates to it. If that source later drops, it's
+/// cleared so the reader's retry loop re-probes — so the app picks up whichever
+/// sim the user launches, whenever they launch it.
+///
+/// The probe *is* opening the mapping (via each connector's `connect()`), which
+/// succeeds only when a sim is running AND publishing telemetry — a stronger,
+/// cheaper signal than checking for a running process (a game sitting at its
+/// menu, or without the shared-memory plugin, produces no mapping).
+#[cfg(windows)]
+struct AutoConnector {
+    active: Option<Box<dyn SimConnector>>,
+}
+
+#[cfg(windows)]
+impl AutoConnector {
+    fn new() -> Self {
+        Self { active: None }
+    }
+
+    /// Fresh connectors to probe, in priority order. iRacing first (its
+    /// data-ready event makes liveness instant), then LMU.
+    fn candidates() -> Vec<Box<dyn SimConnector>> {
+        use iracing_connector::IRacingConnector;
+        use lmu_connector::LmuConnector;
+        vec![
+            Box::new(IRacingConnector::new()),
+            Box::new(LmuConnector::new()),
+        ]
+    }
+}
+
+#[cfg(windows)]
+impl SimConnector for AutoConnector {
+    fn sim_id(&self) -> overlay_core::SimId {
+        self.active
+            .as_ref()
+            .map_or(overlay_core::SimId::Unknown, |c| c.sim_id())
+    }
+
+    fn connect(&mut self) -> Result<(), overlay_core::ConnectError> {
+        for mut cand in Self::candidates() {
+            if cand.connect().is_ok() {
+                self.active = Some(cand);
+                return Ok(());
+            }
+        }
+        // Nothing running yet; the reader backs off and retries, re-probing.
+        Err(overlay_core::ConnectError::NotRunning)
+    }
+
+    fn is_connected(&self) -> bool {
+        self.active.as_ref().is_some_and(|c| c.is_connected())
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.active
+            .as_ref()
+            .map_or_else(Capabilities::default, |c| c.capabilities())
+    }
+
+    fn poll(&mut self) -> Option<TelemetrySnapshot> {
+        let snap = self.active.as_mut()?.poll();
+        // Forget a dropped source so the reader re-detects on the next loop.
+        if self.active.as_ref().is_some_and(|c| !c.is_connected()) {
+            self.active = None;
+        }
+        snap
+    }
+}
+
+/// Pick the telemetry source. `OVERLAY_SOURCE=mock|iracing|lmu|replay|auto`
+/// (default auto). Auto probes for whichever sim is running (see
+/// [`AutoConnector`]). For replay, `OVERLAY_REPLAY` gives the JSONL path. The
+/// live sims are Windows-only; elsewhere we fall back to the mock.
 fn build_connector(source: &str) -> Box<dyn SimConnector> {
     if source == "replay" {
         let path =
@@ -483,9 +615,13 @@ fn build_connector(source: &str) -> Box<dyn SimConnector> {
     #[cfg(windows)]
     {
         use iracing_connector::IRacingConnector;
+        use lmu_connector::LmuConnector;
         match source {
             "mock" => Box::new(MockConnector::new()),
-            _ => Box::new(IRacingConnector::new()),
+            "iracing" => Box::new(IRacingConnector::new()),
+            "lmu" => Box::new(LmuConnector::new()),
+            // "auto" (and any unknown value) → detect whichever sim is running.
+            _ => Box::new(AutoConnector::new()),
         }
     }
     #[cfg(not(windows))]
@@ -918,30 +1054,16 @@ fn spawn_bridge(app: AppHandle) {
             }
             let connector = build_connector(&source);
 
-            let caps = connector.capabilities();
-            let caps_msg = CapsMsg {
-                clutch: caps.clutch,
-                steering_angle: caps.steering_angle,
-                fuel: caps.fuel,
-                deltas: caps.deltas,
-                relative_gaps: caps.relative_gaps,
-                irating: caps.irating,
-                safety_rating: caps.safety_rating,
-                multiclass: caps.multiclass,
-                proximity: caps.proximity,
-                track_map: caps.track_map,
-                race_control: caps.race_control,
-                chat: caps.chat,
-                weather: caps.weather,
-                sectors: caps.sectors,
-                car_setup: caps.car_setup,
-                spectator: caps.spectator,
-                pit_info: caps.pit_info,
-            };
-            let _ = app.emit(EVT_CAPS, caps_msg.clone());
-
             let reader = spawn_reader(connector);
             let rx = reader.snapshots();
+
+            // Capabilities must be read live from the reader, not captured once
+            // here: with the auto-detecting source, which sim is connected (and
+            // thus what it provides) isn't known until `connect()` succeeds on the
+            // reader thread. Emit the current (possibly still-empty) caps now, and
+            // re-emit fresh on every slow tick below so widgets un-hide the moment
+            // a sim connects.
+            let _ = app.emit(EVT_CAPS, CapsMsg::from(reader.capabilities()));
 
             let mut frames = 0u32;
             let mut last_rate = Instant::now();
@@ -954,6 +1076,8 @@ fn spawn_bridge(app: AppHandle) {
             let now = Instant::now();
             let mut last_slow = now.checked_sub(Duration::from_secs(1)).unwrap_or(now);
             let mut last_frame = now.checked_sub(SESSION_TIMEOUT * 2).unwrap_or(now);
+            // Backdated so the very first frame always emits immediately.
+            let mut last_fast_emit = now.checked_sub(FAST_EMIT_MIN_INTERVAL).unwrap_or(now);
 
             loop {
                 match rx.recv_timeout(Duration::from_millis(400)) {
@@ -977,14 +1101,36 @@ fn spawn_bridge(app: AppHandle) {
                             last_rate = now;
                         }
 
-                        if app.emit(EVT_FAST, fast_from(&snap, reader_hz)).is_err() {
-                            break; // app shutting down
+                        // Throttle to FAST_EMIT_MIN_INTERVAL by dropping this frame's
+                        // emit when we're still inside the window since the last one
+                        // — the next frame (always the newest available) gets it
+                        // instead. Everything else below (session-active, slow/caps
+                        // ticks) still runs on every frame, unaffected.
+                        if now.duration_since(last_fast_emit) >= FAST_EMIT_MIN_INTERVAL {
+                            // Fast telemetry (~60Hz) is only ever consumed by the
+                            // overlay window's widgets (their own rAF loop reads
+                            // it directly, bypassing React state) — `manager`
+                            // never touches it. A global `app.emit` would still
+                            // deliver every frame to `manager`'s webview too,
+                            // burning CPU there for nothing, so target the
+                            // overlay window specifically. Slow/caps stay global
+                            // emits below: `manager` legitimately reads slow data
+                            // (`useSlow()` in ProfilesPage).
+                            if let Some(overlay) = app.get_webview_window("overlay") {
+                                if overlay.emit(EVT_FAST, fast_from(&snap, reader_hz)).is_err() {
+                                    break; // app shutting down
+                                }
+                                last_fast_emit = now;
+                            }
+                            // No overlay window yet (early startup): skip this
+                            // frame's fast emit rather than erroring — it isn't
+                            // a shutdown condition, just nothing to deliver to.
                         }
 
                         if snap.meta.changed.slow
                             || now.duration_since(last_slow) >= Duration::from_millis(200)
                         {
-                            let _ = app.emit(EVT_CAPS, caps_msg.clone());
+                            let _ = app.emit(EVT_CAPS, CapsMsg::from(reader.capabilities()));
                             let _ = app.emit(EVT_SLOW, slow_from(&snap));
                             last_slow = now;
                         }
@@ -1038,7 +1184,103 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Minimal shape of `app-settings.json` for the one field we need at this
+/// point — everything else in `AppSettings` (TS side) is irrelevant here and
+/// `#[serde(default)]` means an old/partial/corrupt file just parses as
+/// `false` instead of failing.
+#[cfg(windows)]
+#[derive(Deserialize, Default)]
+struct ReduceGpuSetting {
+    #[serde(default, rename = "reduceGpu")]
+    reduce_gpu: bool,
+}
+
+/// Reads the persisted "Reduce GPU usage" preference and, if enabled, sets
+/// `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` before Tauri/wry create any
+/// WebView2 environment.
+///
+/// This has to run this early — before `tauri::Builder::default()` — because
+/// WebView2 reads this env var once, at webview-creation time. The app's
+/// windows are declared statically in `tauri.conf.json` and get created
+/// during `.run()`, so by the time an `AppHandle` exists (e.g. inside
+/// `.setup()`) it's already too late. That in turn means we can't use
+/// `app.path().app_config_dir()` (needs an `AppHandle`) to find the settings
+/// file the normal way (see `settings_path` above) — instead we reconstruct
+/// the same path by hand from the compiled app identifier + `%APPDATA%`,
+/// matching how Tauri v2 resolves `app_config_dir()` on Windows
+/// (`%APPDATA%\{identifier}\app-settings.json`).
+///
+/// The two flags this sets are deliberately narrow: `--disable-gpu-rasterization`
+/// and `--disable-accelerated-2d-canvas` move tile/2D-canvas *painting* onto
+/// the CPU (relieving a GPU pegged at 99% by the game) while leaving
+/// DirectComposition / GPU compositing untouched — so the overlay's
+/// transparency and click-through keep working exactly as before. We
+/// deliberately do NOT use `--disable-gpu`, `--disable-gpu-compositing`,
+/// `--disable-gpu-vsync`, or `--disable-frame-rate-limit` — those disable (or
+/// otherwise break) the compositor itself, which breaks transparent windows.
+///
+/// This is set process-globally (one shared WebView2 environment for both the
+/// `manager` and `overlay` windows) rather than per-window, which would need
+/// a second WebView2 environment via a distinct `dataDirectory`. That's an
+/// intentional tradeoff: per-window environments hit a documented Tauri/WebView2
+/// crash class (tauri-apps/tauri#11144, #13092) and cost extra memory for the
+/// second environment. Applying CPU rasterization to the manager window too is
+/// harmless — it's a plain decorated control UI, not a 60Hz telemetry surface.
+///
+/// Best-effort and silent: a missing/unreadable/corrupt settings file is
+/// treated as "disabled," matching the default-off contract — this must never
+/// be a reason the app fails to launch.
+///
+/// Takes effect only after a relaunch: WebView2 creates its environment (and
+/// reads this env var) once per process and reuses it for the process's
+/// lifetime, so a change made while running has no effect until the whole
+/// process restarts.
+#[cfg(windows)]
+fn apply_reduce_gpu_env_if_enabled(identifier: &str) {
+    let Ok(appdata) = std::env::var("APPDATA") else {
+        return;
+    };
+    let path = std::path::Path::new(&appdata)
+        .join(identifier)
+        .join("app-settings.json");
+    let Ok(data) = std::fs::read_to_string(&path) else {
+        return;
+    };
+
+    // serde_json is already a direct dependency of this crate (used
+    // throughout for the telemetry payloads), so a real parse of the one
+    // field we need is no heavier than a string search and, unlike a
+    // substring search for `"reduceGpu":true`, isn't fooled by whitespace or
+    // key-order differences the frontend's `JSON.stringify` could introduce.
+    let enabled = serde_json::from_str::<ReduceGpuSetting>(&data)
+        .map(|s| s.reduce_gpu)
+        .unwrap_or(false);
+    if !enabled {
+        return;
+    }
+
+    // wry supplies its own default `--disable-features=...` value for this
+    // env var when the caller hasn't set one; since we're setting it
+    // ourselves, we fold that same feature list in here so we don't lose it
+    // (if a future wry version appends instead of replacing, the duplicate is
+    // harmless).
+    std::env::set_var(
+        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+        "--disable-gpu-rasterization --disable-accelerated-2d-canvas --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection",
+    );
+}
+
 fn main() {
+    // Generated once and reused for both the pre-builder env-var setup (which
+    // needs the app identifier, but not a running app) and `.run()` below.
+    let ctx = tauri::generate_context!();
+
+    // Windows/WebView2-only; must run before the first WebView2 environment is
+    // created, i.e. before `tauri::Builder::default()`'s window setup. See
+    // `apply_reduce_gpu_env_if_enabled` for the full mechanism and rationale.
+    #[cfg(windows)]
+    apply_reduce_gpu_env_if_enabled(&ctx.config().identifier);
+
     tauri::Builder::default()
         // Must be first: a second launch focuses the existing manager instead of
         // starting a duplicate that would fail to register the global hotkey.
@@ -1072,6 +1314,10 @@ fn main() {
             vr::vr_set_layout,
             vr::vr_set_globals,
             vr::vr_recenter,
+            lmu_plugin::lmu_plugin_status,
+            lmu_plugin::lmu_enable_plugin,
+            lmu_plugin::lmu_open_plugins_folder,
+            lmu_plugin::lmu_open_download_page,
         ])
         .manage(OverlayState {
             edit: AtomicBool::new(false),
@@ -1145,6 +1391,6 @@ fn main() {
                 }
             }
         })
-        .run(tauri::generate_context!())
+        .run(ctx)
         .expect("error while running tauri application");
 }

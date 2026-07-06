@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
 import { useCarName } from "./useCarName";
 import { resolveCarLeds, gearLeds } from "./carLeds";
 import { GEAR_COLOR_PRESETS } from "./raceColors";
+import { useRafDraw } from "./useRafDraw";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
+import type { FastSample } from "../store/types";
 
 export interface TachometerConfig {
   redlineRpm: number;
@@ -42,10 +44,19 @@ function Tachometer({ theme, config }: BaseWidgetProps<TachometerConfig>) {
   const live = useRef({ config, profile });
   live.current = { config, profile };
 
-  useEffect(() => {
-    let raf = 0;
-    const draw = () => {
+  // Dirty-skip: everything drawn here derives from `fast` (rpm/gear) plus
+  // `config`/`profile` (redline/shift thresholds, orientation, gear color).
+  // `undefined`-initialized refs guarantee the first frame always paints.
+  const lastFastRef = useRef<FastSample | null | undefined>(undefined);
+  const lastConfigRef = useRef<TachometerConfig | undefined>(undefined);
+  const lastProfileRef = useRef<typeof profile | undefined>(undefined);
+
+  useRafDraw(
+    () => {
       const { config, profile } = live.current;
+      lastFastRef.current = store.latestFast;
+      lastConfigRef.current = config;
+      lastProfileRef.current = profile;
       const fast = store.latestFast;
       const rpm = fast?.rpm ?? 0;
       const gear = fast?.gear ?? null;
@@ -80,11 +91,15 @@ function Tachometer({ theme, config }: BaseWidgetProps<TachometerConfig>) {
         const g = gear == null ? "--" : gear === 0 ? "N" : gear === -1 ? "R" : String(gear);
         gearRef.current.textContent = g;
       }
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [store, t]);
+    },
+    {
+      shouldDraw: () =>
+        store.latestFast !== lastFastRef.current ||
+        live.current.config !== lastConfigRef.current ||
+        live.current.profile !== lastProfileRef.current,
+    },
+    []
+  );
 
   const vertical = config.orientation === "vertical";
   const sp = theme.space;

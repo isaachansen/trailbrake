@@ -1,6 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
+import { useRafDraw } from "./useRafDraw";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
+import type { FastSample, SlowSample } from "../store/types";
 
 export interface RejoinConfig {
   speedThresholdMs: number;
@@ -23,10 +25,19 @@ function RejoinIndicator({ theme, config }: BaseWidgetProps<RejoinConfig>) {
   const live = useRef({ config });
   live.current = { config };
 
-  useEffect(() => {
-    let raf = 0;
-    const draw = () => {
+  // Dirty-skip: everything here derives from `fast` (speed) + `slow` (onTrack,
+  // gaps) + `config` (thresholds). `undefined`-initialized refs guarantee the
+  // first frame always paints.
+  const lastFastRef = useRef<FastSample | null | undefined>(undefined);
+  const lastSlowRef = useRef<SlowSample | null | undefined>(undefined);
+  const lastConfigRef = useRef<RejoinConfig | undefined>(undefined);
+
+  useRafDraw(
+    () => {
       const { config } = live.current;
+      lastFastRef.current = store.latestFast;
+      lastSlowRef.current = store.getSlow();
+      lastConfigRef.current = config;
       const slow = store.getSlow();
       const fast = store.latestFast;
       const playerIdx = slow?.playerCarIdx ?? null;
@@ -86,11 +97,16 @@ function RejoinIndicator({ theme, config }: BaseWidgetProps<RejoinConfig>) {
       if (gapRef.current) {
         gapRef.current.textContent = gapText;
       }
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [store, t]);
+    },
+    {
+      fps: 15,
+      shouldDraw: () =>
+        store.latestFast !== lastFastRef.current ||
+        store.getSlow() !== lastSlowRef.current ||
+        live.current.config !== lastConfigRef.current,
+    },
+    []
+  );
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.9em", color: t.text, boxSizing: "border-box", padding: theme.widgetPad }}>

@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
 import { useSlow } from "../store/hooks";
+import { useRafDraw } from "./useRafDraw";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
+import type { FastSample } from "../store/types";
 
 /** A corner with a name and a lap-distance fraction (0..1). */
 interface CornerMarker {
@@ -87,10 +89,19 @@ function CornerName({ theme, config }: BaseWidgetProps<CornerNameConfig>) {
   const cornersRef = useRef(corners);
   cornersRef.current = corners;
 
-  useEffect(() => {
-    let raf = 0;
-    const draw = () => {
+  // Dirty-skip: this widget only ever changes when a new fast sample arrives
+  // (the approached-corner index + progress are both derived from
+  // `fast.lapDistPct`) or when the corner list itself changes (e.g. switching
+  // cars/tracks while stationary). `undefined`-initialized refs guarantee the
+  // very first check is a mismatch, so the first frame always paints.
+  const lastFastRef = useRef<FastSample | null | undefined>(undefined);
+  const lastCornersRef = useRef<typeof corners | undefined>(undefined);
+
+  useRafDraw(
+    () => {
       const fast = store.latestFast;
+      lastFastRef.current = fast;
+      lastCornersRef.current = cornersRef.current;
       // Sorted corners (markers are lap-distance fractions 0..1, directly
       // comparable to lapDistPct).
       const turns = cornersRef.current.length > 0 ? cornersRef.current : null;
@@ -142,11 +153,10 @@ function CornerName({ theme, config }: BaseWidgetProps<CornerNameConfig>) {
       if (labelRef.current) labelRef.current.textContent = label;
       if (subRef.current) subRef.current.textContent = sub;
       if (progRef.current) progRef.current.style.width = `${progress * 100}%`;
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [store]);
+    },
+    { shouldDraw: () => store.latestFast !== lastFastRef.current || cornersRef.current !== lastCornersRef.current },
+    []
+  );
 
   const fontPx = FONT_PX[config.fontSize] ?? 30;
   const eyebrowPx = Math.round(fontPx * 0.34);

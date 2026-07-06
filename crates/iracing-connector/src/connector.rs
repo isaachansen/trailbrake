@@ -3,8 +3,9 @@
 use std::collections::HashMap;
 
 use overlay_core::{
-    Capabilities, ChangeFlags, ConnectError, Meta, PlayerState, RaceControlMessage, Sectors,
-    SessionState, SimConnector, SimId, TelemetrySnapshot, TirePressures,
+    Capabilities, ChangeFlags, ConnectError, FlagState, Meta, PlayerState, RaceControlMessage,
+    Sectors, SessionState, SimConnector, SimId, TelemetrySnapshot, TirePressures, TrackMetadata,
+    TrackTurn,
 };
 
 use crate::irsdk::header::{build_var_map, Header};
@@ -49,6 +50,37 @@ mod ir_flags {
     pub const START_READY: u32 = 0x2000_0000;
     pub const START_SET: u32 = 0x4000_0000;
     pub const START_GO: u32 = 0x8000_0000;
+
+    /// Any of these mean "yellow / caution" and should light the yellow flag.
+    /// Mirrors `F_ANY_YELLOW` in `src/widgets/Flag.tsx`.
+    pub const ANY_YELLOW: u32 = YELLOW | YELLOW_WAVING | CAUTION | CAUTION_WAVING;
+}
+
+/// Decode the sim-neutral [`FlagState`] from iRacing's raw `irsdk_Flags`
+/// bitfield, using the same bit meanings and priority order as the frontend's
+/// `PRIORITY` table in `src/widgets/Flag.tsx`
+/// (RED > CHECKERED > BLACK > YELLOW(any) > DEBRIS > WHITE > BLUE > GREEN),
+/// so switching widgets over to this enum doesn't change what iRacing shows.
+fn flag_from_raw(raw: u32) -> FlagState {
+    if raw & ir_flags::RED != 0 {
+        FlagState::Red
+    } else if raw & ir_flags::CHECKERED != 0 {
+        FlagState::Checkered
+    } else if raw & ir_flags::BLACK != 0 {
+        FlagState::Black
+    } else if raw & ir_flags::ANY_YELLOW != 0 {
+        FlagState::Yellow
+    } else if raw & ir_flags::DEBRIS != 0 {
+        FlagState::Debris
+    } else if raw & ir_flags::WHITE != 0 {
+        FlagState::White
+    } else if raw & ir_flags::BLUE != 0 {
+        FlagState::Blue
+    } else if raw & ir_flags::GREEN != 0 {
+        FlagState::Green
+    } else {
+        FlagState::None
+    }
 }
 
 pub struct IRacingConnector {
@@ -84,6 +116,16 @@ pub struct IRacingConnector {
     last_emitted_tick: Option<i64>,
     /// Whether the one-shot `OVERLAY_DUMP_VARS` diagnostic has already run.
     vars_dumped: bool,
+    /// Cached `track_map::path_for(session_min.track_id)`, resolved only when
+    /// the session/track (re)resolves (see `poll`'s `session_info_update`
+    /// branch) instead of cloning the centerline every tick.
+    track_path_cache: Option<Vec<[f32; 2]>>,
+    /// Cached `track_map::turns_for(session_min.track_id)`; same lifetime as
+    /// `track_path_cache`.
+    track_turns_cache: Option<Vec<TrackTurn>>,
+    /// Cached `track_map::metadata_for(session_min.track_id)`; same lifetime
+    /// as `track_path_cache`.
+    track_metadata_cache: Option<TrackMetadata>,
 }
 
 /// `true` when a session-identity var changed between two polls. Only a
@@ -346,6 +388,9 @@ impl IRacingConnector {
             prev_session_unique_id: None,
             last_emitted_tick: None,
             vars_dumped: false,
+            track_path_cache: None,
+            track_turns_cache: None,
+            track_metadata_cache: None,
         }
     }
 
@@ -644,6 +689,14 @@ impl SimConnector for IRacingConnector {
                     .and_then(|pi| self.session_min.drivers.iter().find(|d| d.car_idx == pi))
                     .and_then(|d| d.car_screen_name.clone());
                 self.session_min = parse_min(&yaml);
+                // Resolve the bundled track map only here (session/track
+                // (re)resolution), not on every poll tick — `path_for` clones
+                // a potentially large centerline `Vec`, and the track can
+                // only change when the session info is rebuilt.
+                self.track_path_cache = self.session_min.track_id.and_then(track_map::path_for);
+                self.track_turns_cache = self.session_min.track_id.and_then(track_map::turns_for);
+                self.track_metadata_cache =
+                    self.session_min.track_id.and_then(track_map::metadata_for);
                 let new_player_car = self
                     .session_min
                     .driver_car_idx
@@ -927,6 +980,7 @@ impl SimConnector for IRacingConnector {
                     .count() as u32,
             ),
             flags_raw: Some(flags_raw),
+            flag: flag_from_raw(flags_raw),
             air_temp_c: f32_var(vm, buf, "AirTemp"),
             track_temp_c: f32_var(vm, buf, "TrackTemp"),
             wind_speed_ms: f32_var(vm, buf, "WindVel"),
@@ -950,10 +1004,13 @@ impl SimConnector for IRacingConnector {
                 .map(|v| v as u32),
             messages: self.messages.clone(),
             chat_messages: Vec::new(), // no broadcast chat source wired
-            // Bundled official centerline + corner labels for this track, if any.
-            track_path: self.session_min.track_id.and_then(track_map::path_for),
-            track_turns: self.session_min.track_id.and_then(track_map::turns_for),
-            track_metadata: self.session_min.track_id.and_then(track_map::metadata_for),
+            // Bundled official centerline + corner labels for this track, if
+            // any — cloned from the cache populated when the session/track
+            // last (re)resolved (see the `session_info_update` branch above),
+            // not re-resolved from `track_map` every tick.
+            track_path: self.track_path_cache.clone(),
+            track_turns: self.track_turns_cache.clone(),
+            track_metadata: self.track_metadata_cache.clone(),
         };
 
         // Remember what we just emitted so the no-event fallback poll (above)
@@ -1231,5 +1288,33 @@ mod tests {
         assert_eq!(c.prev_fuel, None);
         assert_eq!(c.prev_flags, 0);
         assert!(c.messages.is_empty());
+    }
+
+    /// Coordination-contract test: `flag_from_raw` must decode the same bit
+    /// meanings and priority order as the frontend's `PRIORITY` table in
+    /// `src/widgets/Flag.tsx`, so switching a widget to the sim-neutral
+    /// `FlagState` doesn't change what iRacing shows.
+    #[test]
+    fn flag_from_raw_matches_frontend_priority() {
+        assert_eq!(flag_from_raw(0), FlagState::None);
+        assert_eq!(flag_from_raw(ir_flags::CHECKERED), FlagState::Checkered);
+        assert_eq!(flag_from_raw(ir_flags::YELLOW_WAVING), FlagState::Yellow);
+        assert_eq!(flag_from_raw(ir_flags::CAUTION), FlagState::Yellow);
+        assert_eq!(flag_from_raw(ir_flags::GREEN), FlagState::Green);
+        assert_eq!(flag_from_raw(ir_flags::BLUE), FlagState::Blue);
+        assert_eq!(flag_from_raw(ir_flags::WHITE), FlagState::White);
+        assert_eq!(flag_from_raw(ir_flags::DEBRIS), FlagState::Debris);
+        assert_eq!(flag_from_raw(ir_flags::BLACK), FlagState::Black);
+        assert_eq!(flag_from_raw(ir_flags::RED), FlagState::Red);
+        // Priority: red beats everything else when multiple bits are set.
+        assert_eq!(
+            flag_from_raw(ir_flags::RED | ir_flags::CHECKERED | ir_flags::GREEN),
+            FlagState::Red
+        );
+        // Checkered beats black/yellow/etc, but not red.
+        assert_eq!(
+            flag_from_raw(ir_flags::CHECKERED | ir_flags::BLACK | ir_flags::YELLOW),
+            FlagState::Checkered
+        );
     }
 }

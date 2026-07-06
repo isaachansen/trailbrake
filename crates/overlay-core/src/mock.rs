@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use crate::connector::{Capabilities, ConnectError, SimConnector};
 use crate::snapshot::{
-    CarState, ChangeFlags, ChatMessage, Meta, PlayerState, RaceControlMessage, Sectors,
-    SessionState, SimId, TelemetrySnapshot, TirePressures, TrackTurn,
+    CarState, ChangeFlags, ChatMessage, FlagState, Meta, PlayerState, RaceControlMessage,
+    Sectors, SessionState, SimId, TelemetrySnapshot, TirePressures, TrackTurn,
 };
 
 const TAU: f32 = std::f32::consts::TAU;
@@ -451,6 +451,7 @@ impl MockConnector {
                 laps_remaining: None,
                 total_cars: Some(FIELD.len() as u32),
                 flags_raw: Some(0x40), // blue flag (faster car behind — let them pass)
+                flag: FlagState::Blue,
                 air_temp_c: Some(22.0),
                 track_temp_c: Some(31.0),
                 wind_speed_ms: Some(3.5),

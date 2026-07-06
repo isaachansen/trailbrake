@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
 import { WidgetTitle } from "./WidgetTitle";
+import { useRafDraw } from "./useRafDraw";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface LaunchAssistConfig {
@@ -31,10 +32,17 @@ function LaunchAssist({ theme, config }: BaseWidgetProps<LaunchAssistConfig>) {
   const live = useRef({ config });
   live.current = { config };
 
-  useEffect(() => {
-    let raf = 0;
-    const draw = () => {
+  // Dirty-skip: everything here derives from `fast` (clutch/throttle/brake/
+  // speed) plus `config` (targets, show-brake). `undefined`-initialized refs
+  // guarantee the first frame always paints.
+  const lastFastRef = useRef<typeof store.latestFast | undefined>(undefined);
+  const lastConfigRef = useRef<LaunchAssistConfig | undefined>(undefined);
+
+  useRafDraw(
+    () => {
       const { config } = live.current;
+      lastFastRef.current = store.latestFast;
+      lastConfigRef.current = config;
       const fast = store.latestFast;
       const speed = fast?.speedMs ?? 0;
       const stopped = speed < 2;
@@ -65,11 +73,10 @@ function LaunchAssist({ theme, config }: BaseWidgetProps<LaunchAssistConfig>) {
 
       if (clutchMarker.current) clutchMarker.current.style.left = `${config.clutchTarget * 100}%`;
       if (throttleMarker.current) throttleMarker.current.style.left = `${config.throttleTarget * 100}%`;
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [store, t]);
+    },
+    { shouldDraw: () => store.latestFast !== lastFastRef.current || live.current.config !== lastConfigRef.current },
+    []
+  );
 
   const trackStyle: React.CSSProperties = {
     position: "relative",

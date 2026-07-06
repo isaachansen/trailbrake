@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { defaultTheme } from "./theme/theme";
 import { initTransport, isTauri } from "./store/transport";
+import { isLiveOverlayWindow } from "./store/windowKind";
 import { editModeStore } from "./store/editMode";
 import { startHitRegionReporting } from "./store/hitRegions";
 import { controls, type VrWidgetLayout } from "./store/controls";
@@ -26,6 +27,10 @@ import { PerfHud } from "./perf/PerfHud";
 
 export default function OverlayApp() {
   const theme = defaultTheme;
+  // Only true for the real transparent overlay window (never the browser
+  // dev-shell's in-page preview) — see windowKind.ts for why backdrop-filter
+  // blur is skipped there.
+  const isOverlayWindow = isLiveOverlayWindow();
   const editing = useSyncExternalStore(editModeStore.subscribe, editModeStore.get);
   const layout = useLayout();
   const caps = useCaps();
@@ -274,9 +279,9 @@ export default function OverlayApp() {
           <span
             style={{
               padding: `${theme.space.xs}px ${theme.space.md}px`,
-              background: theme.colors.surface,
-              backdropFilter: theme.panelBlur,
-              WebkitBackdropFilter: theme.panelBlur,
+              background: isOverlayWindow ? `rgba(18, 20, 27, ${theme.overlayMinAlpha})` : theme.colors.surface,
+              backdropFilter: isOverlayWindow ? "none" : theme.panelBlur,
+              WebkitBackdropFilter: isOverlayWindow ? "none" : theme.panelBlur,
               border: `1px solid ${theme.colors.surfaceBorder}`,
               borderRadius: theme.radius,
               font: `600 11px ${theme.font.label}`,

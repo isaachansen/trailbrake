@@ -1,9 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { useSlow } from "../store/hooks";
 import { useSettings } from "../store/appSettings";
 import { useStoreInstance } from "../store/storeContext";
 import { speedValue, speedLabel } from "./format";
 import { WidgetTitle } from "./WidgetTitle";
+import { useRafDraw } from "./useRafDraw";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface PitlaneHelperConfig {
@@ -50,14 +51,22 @@ function PitlaneHelper({ theme, config }: BaseWidgetProps<PitlaneHelperConfig>) 
   const speedColor = onPitRoad ? t.gain : t.text;
   const sp = theme.space;
 
+  // Dirty-skip: the marker only moves when a new fast sample arrives, or when
+  // `speedLimit` itself changes (a new slow sample with a different pit-lane
+  // limit — rare, but a primitive compare is nearly free). `undefined`-
+  // initialized refs guarantee the first check always mismatches.
+  const lastFastRef = useRef<typeof store.latestFast | undefined>(undefined);
+  const lastSpeedLimitRef = useRef<number | null | undefined>(undefined);
+
   // Live speed-vs-limit marker on the gradient bar, driven straight off the
   // fast path (rAF loop touching the DOM directly) rather than React state —
   // this is a 60 Hz value and the widget otherwise only re-renders on slow
   // ticks. Position = speed/limit (clamped to the bar), colored green under
   // the limit / red over it.
-  useEffect(() => {
-    let raf = 0;
-    const draw = () => {
+  useRafDraw(
+    () => {
+      lastFastRef.current = store.latestFast;
+      lastSpeedLimitRef.current = speedLimit;
       const el = markerRef.current;
       if (el) {
         const speedMs = store.latestFast?.speedMs ?? null;
@@ -70,11 +79,10 @@ function PitlaneHelper({ theme, config }: BaseWidgetProps<PitlaneHelperConfig>) 
           el.style.opacity = "0";
         }
       }
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [store, speedLimit, t.gain, t.loss]);
+    },
+    { shouldDraw: () => store.latestFast !== lastFastRef.current || speedLimit !== lastSpeedLimitRef.current },
+    []
+  );
 
   const labelStyle = {
     fontFamily: theme.font.label,

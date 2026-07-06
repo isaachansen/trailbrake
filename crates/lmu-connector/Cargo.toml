@@ -3,7 +3,17 @@ name = "lmu-connector"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "STUB: Le Mans Ultimate connector seam (rFactor2 shared memory). Not yet implemented."
+description = "Le Mans Ultimate / rFactor2 shared-memory reader (first listener), normalized into overlay-core's TelemetrySnapshot."
 
 [dependencies]
 overlay-core = { workspace = true }
+
+# The Win32 surface is only needed on Windows. On other platforms this crate
+# compiles to an always-NotRunning stub so `cargo build --workspace` works on
+# macOS too. rF2 is poll-based (no data-ready event), so unlike the iRacing
+# reader we don't need Win32_System_Threading.
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Memory",
+] }

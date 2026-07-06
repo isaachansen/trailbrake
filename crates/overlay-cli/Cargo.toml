@@ -14,3 +14,4 @@ overlay-core = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 iracing-connector = { workspace = true }
+lmu-connector = { workspace = true }

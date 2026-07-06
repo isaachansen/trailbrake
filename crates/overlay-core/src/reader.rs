@@ -7,11 +7,11 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TrySendError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::connector::{ConnectError, SimConnector};
+use crate::connector::{Capabilities, ConnectError, SimConnector};
 use crate::snapshot::TelemetrySnapshot;
 
 /// Owns the reader thread and the receiving end of the snapshot stream.
@@ -20,6 +20,12 @@ use crate::snapshot::TelemetrySnapshot;
 pub struct ReaderHandle {
     rx: Receiver<TelemetrySnapshot>,
     stop: Arc<AtomicBool>,
+    /// The connected source's capabilities, refreshed by the reader thread each
+    /// time it (re-)connects. `default()` (all-false) until the first connect.
+    /// This must be read live rather than captured once up front: with an
+    /// auto-detecting source, *which* sim is connected — and thus what it can
+    /// provide — isn't known until `connect()` succeeds.
+    caps: Arc<Mutex<Capabilities>>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -29,6 +35,12 @@ impl ReaderHandle {
     /// a hung webview never grows memory or replays a backlog of stale frames.
     pub fn snapshots(&self) -> &Receiver<TelemetrySnapshot> {
         &self.rx
+    }
+
+    /// Capabilities of the currently-connected source (all-false before the
+    /// first successful connect, or after the source disconnects).
+    pub fn capabilities(&self) -> Capabilities {
+        self.caps.lock().map(|c| *c).unwrap_or_default()
     }
 
     /// Signal the reader thread to stop (idempotent). Drop also does this.
@@ -65,6 +77,8 @@ where
     let (tx, rx) = mpsc::sync_channel::<TelemetrySnapshot>(CHANNEL_BOUND);
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = Arc::clone(&stop);
+    let caps = Arc::new(Mutex::new(Capabilities::default()));
+    let caps_thread = Arc::clone(&caps);
 
     let join = thread::Builder::new()
         .name("telemetry-reader".into())
@@ -75,7 +89,15 @@ where
             while !stop_thread.load(Ordering::Relaxed) {
                 if !connector.is_connected() {
                     match connector.connect() {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            // Publish the now-connected source's capabilities so
+                            // consumers reflect what this sim actually provides
+                            // (essential for an auto-detecting source, whose sim
+                            // is only known once connect succeeds).
+                            if let Ok(mut c) = caps_thread.lock() {
+                                *c = connector.capabilities();
+                            }
+                        }
                         Err(ConnectError::Unsupported) => {
                             // No point retrying on this platform/source.
                             break;
@@ -115,6 +137,7 @@ where
     ReaderHandle {
         rx,
         stop,
+        caps,
         join: Some(join),
     }
 }

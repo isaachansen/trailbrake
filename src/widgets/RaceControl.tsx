@@ -1,10 +1,11 @@
 // Race control: a feed of officials' messages — flags, penalties, info. Reads
 // from the normalized `slow.messages` feed (populated by the connector from flag
-// changes) and derives the current status chip from `slow.flagsRaw`. Falls back
-// to representative entries when no live messages exist yet.
+// changes) and derives the current status chip from the sim-neutral `slow.flag`.
+// Falls back to representative entries when no live messages exist yet.
 
 import { useSlow } from "../store/hooks";
 import { useScreenLayer } from "../components/screenLayer";
+import type { FlagName } from "../store/types";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface RaceControlConfig {
@@ -12,21 +13,6 @@ export interface RaceControlConfig {
 }
 
 const defaultConfig: RaceControlConfig = { maxRows: 5 };
-
-// iRacing `irsdk_Flags` bitfield — must match Flag.tsx exactly.
-const F_CHECKERED      = 0x00000001;
-const F_WHITE          = 0x00000002;
-const F_GREEN          = 0x00000004;
-const F_YELLOW         = 0x00000008;
-const F_RED            = 0x00000010;
-const F_BLUE           = 0x00000020;
-const F_YELLOW_WAVING  = 0x00000100;
-const F_CAUTION        = 0x00004000;
-const F_CAUTION_WAVING = 0x00008000;
-const F_BLACK          = 0x00010000;
-
-// Combined yellow family (any of these lights the yellow chip).
-const F_ANY_YELLOW = F_YELLOW | F_YELLOW_WAVING | F_CAUTION | F_CAUTION_WAVING;
 
 type Tag = "BLUE" | "PEN" | "INFO" | "YEL" | "GREEN" | "RED" | "WHITE" | "CHECKER";
 interface Msg {
@@ -52,17 +38,22 @@ function fmtTime(s: number | null): string {
   return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
-function deriveStatusChip(flagsRaw: number | null): { label: string; color: string } | null {
-  if (flagsRaw == null || flagsRaw === 0) return null;
-  // Priority mirrors Flag.tsx: red > checkered > black > yellow family > white > blue > green.
-  if (flagsRaw & F_RED)        return { label: "RED",     color: "#ff495e" };
-  if (flagsRaw & F_CHECKERED)  return { label: "CHECKER", color: "#eef1f5" };
-  if (flagsRaw & F_BLACK)      return { label: "BLACK",   color: "#ff495e" };
-  if (flagsRaw & F_ANY_YELLOW) return { label: "YELLOW",  color: "#ffb43d" };
-  if (flagsRaw & F_WHITE)      return { label: "WHITE",   color: "#eef1f5" };
-  if (flagsRaw & F_BLUE)       return { label: "BLUE",    color: "#3d8bff" };
-  if (flagsRaw & F_GREEN)      return { label: "GREEN",   color: "#2fe08a" };
-  return null;
+// Mirrors the original bit-tested chip table exactly (which never surfaced a
+// chip for debris — only Flag.tsx handled that flag) so iRacing output is
+// unchanged. Priority is handled upstream by the backend's FlagState decode.
+const STATUS_CHIP: Partial<Record<FlagName, { label: string; color: string }>> = {
+  red: { label: "RED", color: "#ff495e" },
+  checkered: { label: "CHECKER", color: "#eef1f5" },
+  black: { label: "BLACK", color: "#ff495e" },
+  yellow: { label: "YELLOW", color: "#ffb43d" },
+  white: { label: "WHITE", color: "#eef1f5" },
+  blue: { label: "BLUE", color: "#3d8bff" },
+  green: { label: "GREEN", color: "#2fe08a" },
+};
+
+function deriveStatusChip(flag: FlagName | null | undefined): { label: string; color: string } | null {
+  if (flag == null || flag === "none") return null;
+  return STATUS_CHIP[flag] ?? null;
 }
 
 // Representative feed for preview/mock, oldest first (matches the live-message
@@ -99,7 +90,7 @@ function RaceControl({ theme, config }: BaseWidgetProps<RaceControlConfig>) {
     : isPreviewOrMock
       ? DEMO.slice(-config.maxRows)
       : [];
-  const chip = deriveStatusChip(slow?.flagsRaw ?? null);
+  const chip = deriveStatusChip(slow?.flag);
 
   const tagStyle: Record<Tag, { color: string; chip: string; chipText: string }> = {
     BLUE: { color: "#3d8bff", chip: "#3d8bff", chipText: "#0a0b0e" },

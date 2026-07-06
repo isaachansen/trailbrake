@@ -2,10 +2,11 @@
 // and in edit mode provides drag-to-move, resize, and selection. The widget
 // component itself stays purely presentational.
 
-import { useRef } from "react";
+import { memo, useRef } from "react";
 import { layoutStore, type WidgetInstance } from "../store/layout";
 import { getWidgetDef } from "../widgets/registry";
 import { useSettings } from "../store/appSettings";
+import { isLiveOverlayWindow } from "../store/windowKind";
 import { FitContent } from "./FitContent";
 import { glassChrome, GLASS_SHADOW, GLASS_BORDER, GlassSpecular } from "./liquidGlass";
 import type { Capabilities } from "../store/types";
@@ -22,7 +23,7 @@ interface Props {
   sessionState: SessionStateKey | null;
 }
 
-export function WidgetHost({ instance, editing, selected, theme, caps, sessionState }: Props) {
+function WidgetHostImpl({ instance, editing, selected, theme, caps, sessionState }: Props) {
   const def = getWidgetDef(instance.type);
   const dragRef = useRef<{ mode: "move" | "resize"; sx: number; sy: number; ox: number; oy: number } | null>(null);
   const panelStyle = useSettings().panelStyle;
@@ -37,14 +38,26 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
   // and numbers stay fully crisp at any setting. 100% = a solid, readable panel
   // (the glass look comes from lowering it, not from a baked-in translucency).
   const panelAlpha = Math.max(0, Math.min(1, eff.opacity));
-  const surfaceBg = `rgba(18, 20, 27, ${panelAlpha})`;
+  // On the live overlay window we never apply backdrop-filter blur (see
+  // isLiveOverlayWindow's doc comment: it can't sample the game behind a
+  // different HWND, so it costs GPU for no visible effect). Floor the alpha
+  // there so a low "glass" opacity setting doesn't read as a faint,
+  // hard-edged tint with no blur to soften it — everywhere else the user's
+  // chosen opacity is honored exactly.
+  const isOverlayWindow = isLiveOverlayWindow();
+  const effectiveAlpha = isOverlayWindow ? Math.max(panelAlpha, theme.overlayMinAlpha) : panelAlpha;
+  const surfaceBg = `rgba(18, 20, 27, ${effectiveAlpha})`;
 
   // Some widgets paint only a screen-level effect (e.g. the Spotter set to
   // edges-only) and want no panel of their own. Outside edit mode we drop all
   // chrome so nothing shows; in edit mode the chrome stays so it's selectable.
   const chromeless = (def.transparentPanel?.(instance.config as any) ?? false) && !editing;
-  // Liquid Glass panel style (opt-in via settings). Not for chromeless widgets.
-  const glass = !chromeless && panelStyle === "liquid";
+  // Liquid Glass panel style (opt-in via settings). Not for chromeless widgets,
+  // and never on the live overlay window — its refraction+blur backdrop-filter
+  // has the exact same "can't sample the game, costs GPU anyway" problem as
+  // the flat glass blur, only heavier. Falls back to the (now non-blurred)
+  // flat panel below; the setting still applies fully in the manager/gallery.
+  const glass = !chromeless && !isOverlayWindow && panelStyle === "liquid";
 
   // Capability-based hiding (§3): if the active sim can't feed this widget, hide
   // it entirely in race mode; in edit mode show a placeholder so the user knows.
@@ -138,8 +151,8 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
             ? glassChrome(panelAlpha)
             : {
                 background: chromeless ? "transparent" : surfaceBg,
-                backdropFilter: chromeless ? "none" : theme.panelBlur,
-                WebkitBackdropFilter: chromeless ? "none" : theme.panelBlur,
+                backdropFilter: chromeless || isOverlayWindow ? "none" : theme.panelBlur,
+                WebkitBackdropFilter: chromeless || isOverlayWindow ? "none" : theme.panelBlur,
                 borderRadius: theme.radius,
               }),
           border: editing
@@ -240,9 +253,9 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
             textTransform: "uppercase",
             letterSpacing: "0.06em",
             color: selected ? theme.colors.edit : theme.colors.textDim,
-            background: theme.colors.surface,
-            backdropFilter: theme.panelBlur,
-            WebkitBackdropFilter: theme.panelBlur,
+            background: isOverlayWindow ? surfaceBg : theme.colors.surface,
+            backdropFilter: isOverlayWindow ? "none" : theme.panelBlur,
+            WebkitBackdropFilter: isOverlayWindow ? "none" : theme.panelBlur,
             border: `1px solid ${selected ? theme.colors.edit : theme.colors.surfaceBorder}`,
             borderRadius: theme.radius / 2,
             boxShadow: theme.panelShadow,
@@ -294,3 +307,38 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
     </>
   );
 }
+
+/**
+ * `OverlayApp` subscribes to `useSlow()`/`useCaps()` and re-renders at the
+ * slow-path rate (~5 Hz). Without memoizing here, that re-render cascades into
+ * re-running EVERY mounted widget's render function 5×/sec — including the
+ * fast-path ones that never look at React props for their actual telemetry
+ * (they read `store.latestFast`/`store.history` in their own `useRafDraw`
+ * loop), so that work is pure waste.
+ *
+ * All the props below are either primitives or references that `OverlayApp`
+ * only changes when something a widget could actually depend on changes:
+ *  - `instance` — from `layoutStore`'s `widgets.map()`; unrelated widgets keep
+ *    their exact object reference across a layout mutation (only the widget
+ *    that was actually edited gets a new one), so this is a real signal.
+ *  - `caps` — `store.getCaps()` returns the same object reference until the
+ *    sim's capability set actually changes (rare — effectively once per
+ *    session), even though `useCaps()` re-subscribes on every slow tick.
+ *  - `theme` — a module-level constant (`defaultTheme`), always reference-equal.
+ *  - `editing`, `selected`, `sessionState` — primitives, compared by value.
+ *
+ * Any of these becoming unequal must trigger a re-render, so the comparator
+ * returns false (not equal → re-render) unless every one of them matches.
+ */
+function propsEqual(prev: Props, next: Props): boolean {
+  return (
+    prev.instance === next.instance &&
+    prev.editing === next.editing &&
+    prev.selected === next.selected &&
+    prev.theme === next.theme &&
+    prev.caps === next.caps &&
+    prev.sessionState === next.sessionState
+  );
+}
+
+export const WidgetHost = memo(WidgetHostImpl, propsEqual);

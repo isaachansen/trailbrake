@@ -41,6 +41,13 @@ export interface AppSettings {
   panelStyle: PanelStyle;
   /** VR compositor placement + enable. */
   vr: VrSettings;
+  /** Opt-in: move the overlay's WebView2 canvas rasterization onto the CPU
+   *  (via `--disable-gpu-rasterization --disable-accelerated-2d-canvas`),
+   *  freeing GPU headroom for the game. Transparency/compositing stay on the
+   *  GPU either way. Read once at process start (`src-tauri/src/main.rs`),
+   *  so toggling this only takes effect after a full app restart. Default
+   *  off = byte-identical behavior to before this setting existed. */
+  reduceGpu: boolean;
 }
 
 export const DEFAULT_VR_SETTINGS: VrSettings = {
@@ -61,6 +68,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   previewMock: true,
   panelStyle: "flat",
   vr: { ...DEFAULT_VR_SETTINGS },
+  reduceGpu: false,
 };
 
 /** Extract the backend-facing `VrGlobals` from the settings. */
@@ -100,6 +108,7 @@ function sanitizeSettings(parsed: unknown): AppSettings {
     accentColor: typeof p.accentColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.accentColor) ? p.accentColor : DEFAULT_SETTINGS.accentColor,
     previewMock: typeof p.previewMock === "boolean" ? p.previewMock : DEFAULT_SETTINGS.previewMock,
     panelStyle: p.panelStyle === "flat" || p.panelStyle === "liquid" ? p.panelStyle : DEFAULT_SETTINGS.panelStyle,
+    reduceGpu: typeof p.reduceGpu === "boolean" ? p.reduceGpu : DEFAULT_SETTINGS.reduceGpu,
     vr: {
       enabled: typeof vr.enabled === "boolean" ? vr.enabled : DEFAULT_VR_SETTINGS.enabled,
       backend: vr.backend === "auto" || vr.backend === "openvr" || vr.backend === "openxr" ? vr.backend : DEFAULT_VR_SETTINGS.backend,
@@ -239,6 +248,19 @@ export const settingsStore = {
    *  CSS variables (see `ManagerApp`). */
   setAccentColor(hex: string) {
     settings = { ...settings, accentColor: hex };
+    emit();
+    schedulePersist();
+  },
+
+  /** Toggle CPU rasterization for the overlay's WebView2 canvas (see
+   *  `reduceGpu` doc comment). Persist-only: unlike most settings here there
+   *  is no live backend call to make it take effect immediately — the
+   *  underlying Chromium flag is read from `app-settings.json` once, in Rust
+   *  `main()`, before any window is created, so it only applies after the
+   *  app is fully restarted. The Settings UI pairs this with a "Restart now"
+   *  affordance. */
+  setReduceGpu(on: boolean) {
+    settings = { ...settings, reduceGpu: on };
     emit();
     schedulePersist();
   },

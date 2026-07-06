@@ -23,6 +23,7 @@ enum Source {
     Auto,
     Mock,
     IRacing,
+    Lmu,
     Replay,
 }
 
@@ -53,6 +54,7 @@ fn parse_args() -> Args {
                 source = match it.next().as_deref() {
                     Some("mock") => Source::Mock,
                     Some("iracing") => Source::IRacing,
+                    Some("lmu") => Source::Lmu,
                     Some("replay") => Source::Replay,
                     Some("auto") | None => Source::Auto,
                     Some(other) => {
@@ -77,7 +79,7 @@ fn parse_args() -> Args {
             }
             "-h" | "--help" => {
                 println!(
-                    "overlay-cli [--source auto|mock|iracing|replay] [--replay FILE] \
+                    "overlay-cli [--source auto|mock|iracing|lmu|replay] [--replay FILE] \
                      [--record FILE] [--record-hz HZ] [--duration SECONDS] [--print-hz HZ]"
                 );
                 std::process::exit(0);
@@ -96,6 +98,69 @@ fn parse_args() -> Args {
     }
 }
 
+/// Auto-detecting source: probes each supported sim's connector in priority
+/// order and adopts the first whose shared memory is present, re-probing (via
+/// the reader's retry loop) whenever nothing is connected. Mirrors the app's
+/// `AutoConnector` in `src-tauri/src/main.rs` — the probe is opening the mapping,
+/// which only succeeds when a sim is running and publishing telemetry.
+#[cfg(windows)]
+struct AutoConnector {
+    active: Option<Box<dyn SimConnector>>,
+}
+
+#[cfg(windows)]
+impl AutoConnector {
+    fn new() -> Self {
+        Self { active: None }
+    }
+
+    fn candidates() -> Vec<Box<dyn SimConnector>> {
+        use iracing_connector::IRacingConnector;
+        use lmu_connector::LmuConnector;
+        vec![
+            Box::new(IRacingConnector::new()),
+            Box::new(LmuConnector::new()),
+        ]
+    }
+}
+
+#[cfg(windows)]
+impl SimConnector for AutoConnector {
+    fn sim_id(&self) -> overlay_core::SimId {
+        self.active
+            .as_ref()
+            .map_or(overlay_core::SimId::Unknown, |c| c.sim_id())
+    }
+
+    fn connect(&mut self) -> Result<(), overlay_core::ConnectError> {
+        for mut cand in Self::candidates() {
+            if cand.connect().is_ok() {
+                self.active = Some(cand);
+                return Ok(());
+            }
+        }
+        Err(overlay_core::ConnectError::NotRunning)
+    }
+
+    fn is_connected(&self) -> bool {
+        self.active.as_ref().is_some_and(|c| c.is_connected())
+    }
+
+    fn capabilities(&self) -> overlay_core::Capabilities {
+        self.active
+            .as_ref()
+            .map_or_else(overlay_core::Capabilities::default, |c| c.capabilities())
+    }
+
+    fn poll(&mut self) -> Option<TelemetrySnapshot> {
+        let snap = self.active.as_mut()?.poll();
+        if self.active.as_ref().is_some_and(|c| !c.is_connected()) {
+            self.active = None;
+        }
+        snap
+    }
+}
+
 /// Build the underlying source connector.
 fn build_source(source: Source, replay: Option<String>) -> Box<dyn SimConnector> {
     if source == Source::Replay {
@@ -105,15 +170,19 @@ fn build_source(source: Source, replay: Option<String>) -> Box<dyn SimConnector>
     #[cfg(windows)]
     {
         use iracing_connector::IRacingConnector;
+        use lmu_connector::LmuConnector;
         match source {
             Source::Mock => Box::new(MockConnector::new()),
-            _ => Box::new(IRacingConnector::new()),
+            Source::IRacing => Box::new(IRacingConnector::new()),
+            Source::Lmu => Box::new(LmuConnector::new()),
+            // Auto detects whichever sim is running (Replay handled above).
+            _ => Box::new(AutoConnector::new()),
         }
     }
     #[cfg(not(windows))]
     {
-        if source == Source::IRacing {
-            eprintln!("iRacing is Windows-only; falling back to the mock source.");
+        if matches!(source, Source::IRacing | Source::Lmu) {
+            eprintln!("live sims are Windows-only; falling back to the mock source.");
         }
         Box::new(MockConnector::new())
     }
@@ -185,6 +254,12 @@ fn main() {
     );
     if matches!(args.source, Source::Auto | Source::IRacing) {
         println!("(waiting for telemetry — if iRacing isn't running, try --source mock)");
+    }
+    if args.source == Source::Lmu {
+        println!(
+            "(waiting for LMU telemetry — needs Le Mans Ultimate running with the rF2 \
+             Shared Memory Map Plugin installed. Set OVERLAY_DUMP_RF2=1 for a calibration dump.)"
+        );
     }
 
     let reader = spawn_reader(connector);

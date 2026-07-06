@@ -4,8 +4,10 @@ A sim is a swappable data source behind one trait. Adding one = implement
 `SimConnector` + a normalization mapping. Nothing above the connector boundary
 changes — widgets only ever see the normalized `TelemetrySnapshot` (§10).
 
-See `crates/lmu-connector` for a stubbed example with implementation notes, and
-`crates/iracing-connector` for a complete, real one.
+See `crates/lmu-connector` for a partial, real-but-early example (a "first
+listener": rF2 shared memory → fast-path physics + basic session, with the
+per-car/laps/flags decode still to come) and `crates/iracing-connector` for a
+complete one.
 
 ## 1. Create the crate
 

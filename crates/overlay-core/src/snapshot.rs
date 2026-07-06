@@ -33,6 +33,25 @@ pub enum SimId {
     Lmu,
 }
 
+/// Sim-neutral session flag state, decoded by each connector from its own
+/// sim-specific flag representation (e.g. iRacing's `irsdk_Flags` bitfield).
+/// Widgets read this instead of decoding `flags_raw` themselves, so a new sim
+/// only needs to fill this one enum to light up flag-aware widgets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlagState {
+    #[default]
+    None,
+    Green,
+    Yellow,
+    Blue,
+    White,
+    Red,
+    Checkered,
+    Black,
+    Debris,
+}
+
 /// "What changed since the last snapshot", so the frontend store can route
 /// updates onto the fast (physics) vs slow (session/scoring) paths and only
 /// re-render widgets whose path actually moved (perf non-negotiable #2).
@@ -70,6 +89,11 @@ pub struct SessionState {
     /// Raw session flag bitfield (sim-specific bits; widgets decode as needed).
     /// For iRacing these are `irsdk_Flags`.
     pub flags_raw: Option<u32>,
+    /// Sim-neutral decoded flag state, derived by the connector from its own
+    /// flag representation (`flags_raw` for iRacing). Prefer this over
+    /// `flags_raw` in new code; `flags_raw` remains for diagnostics.
+    #[serde(default)]
+    pub flag: FlagState,
     pub air_temp_c: Option<f32>,
     pub track_temp_c: Option<f32>,
     /// Wind speed in m/s.

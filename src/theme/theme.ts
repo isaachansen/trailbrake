@@ -45,8 +45,19 @@ export interface Theme {
     sizeBase: number;
   };
   radius: number;
-  /** CSS backdrop-filter for glass panels (the "surface" style). */
+  /** CSS backdrop-filter for glass panels (the "surface" style). Used in the
+   *  manager, gallery, and previews; the live overlay window skips it
+   *  entirely (see `src/store/windowKind.ts`) since backdrop-filter can't
+   *  sample the game behind a different HWND. */
   panelBlur: string;
+  /** Floor for panel background alpha on the live overlay window, where
+   *  `panelBlur` is never applied. Without blur to soften a low-opacity
+   *  "glass" setting, a very translucent panel over real game footage reads
+   *  as a faint, hard-edged tint with poor text contrast — this keeps panels
+   *  legible regardless of the user's chosen opacity, without changing what
+   *  that opacity control means anywhere else (gallery/manager/previews
+   *  still honor it exactly). */
+  overlayMinAlpha: number;
   panelShadow: string;
   // Canonical spacing values widgets should migrate to. Most widgets currently
   // hand-roll their own padding/gaps inline; consume these tokens instead so
@@ -109,6 +120,7 @@ export const defaultTheme: Theme = {
   // audit T1: over bright game footage the old blur+saturate alone let the panel
   // read mid-gray and collapsed textDim/textDim2/cell/gridLine contrast.
   panelBlur: "blur(20px) saturate(1.25) brightness(0.55)",
+  overlayMinAlpha: 0.82,
   panelShadow: "0 18px 50px rgba(0, 0, 0, 0.5)",
   space: { xs: 4, sm: 6, md: 8, lg: 12, xl: 16 },
   widgetPad: "8px 12px",

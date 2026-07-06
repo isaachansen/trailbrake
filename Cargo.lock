@@ -2458,6 +2458,7 @@ name = "lmu-connector"
 version = "0.2.5"
 dependencies = [
  "overlay-core",
+ "windows 0.59.0",
 ]
 
 [[package]]
@@ -2982,6 +2983,7 @@ name = "overlay-cli"
 version = "0.2.5"
 dependencies = [
  "iracing-connector",
+ "lmu-connector",
  "overlay-core",
 ]
 
@@ -3917,6 +3919,7 @@ name = "sim-overlay-app"
 version = "0.2.5"
 dependencies = [
  "iracing-connector",
+ "lmu-connector",
  "overlay-core",
  "serde",
  "serde_json",
@@ -3929,6 +3932,7 @@ dependencies = [
  "tauri-plugin-updater",
  "ureq",
  "vr-overlay",
+ "winreg",
 ]
 
 [[package]]

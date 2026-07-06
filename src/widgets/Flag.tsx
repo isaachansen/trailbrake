@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { useSlow } from "../store/hooks";
 import { useScreenLayer } from "../components/screenLayer";
 import { editModeStore } from "../store/editMode";
+import type { FlagName } from "../store/types";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface FlagConfig {
@@ -14,24 +15,8 @@ const defaultConfig: FlagConfig = {
   glow: true,
 };
 
-// iRacing `irsdk_Flags` bitfield (raw passthrough from the backend).
-const F_CHECKERED = 0x00000001;
-const F_WHITE = 0x00000002;
-const F_GREEN = 0x00000004;
-const F_YELLOW = 0x00000008;
-const F_RED = 0x00000010;
-const F_BLUE = 0x00000020;
-const F_DEBRIS = 0x00000040;
-const F_YELLOW_WAVING = 0x00000100;
-const F_CAUTION = 0x00004000;
-const F_CAUTION_WAVING = 0x00008000;
-const F_BLACK = 0x00010000;
-
-// Any of these mean "yellow / caution" and should light the yellow flag.
-const F_ANY_YELLOW = F_YELLOW | F_YELLOW_WAVING | F_CAUTION | F_CAUTION_WAVING;
-
 interface FlagInfo {
-  bits: number;
+  flag: FlagName;
   name: string;
   color: string;
   checker?: boolean;
@@ -39,18 +24,22 @@ interface FlagInfo {
   dim?: boolean;
 }
 
+// Sim-neutral flag state (`slow.flag`, backend `FlagState` enum). Priority
+// order matches the backend's decode priority (highest first) and the old
+// bit-priority table this replaced: red > checkered > black > yellow > debris
+// > white > blue > green.
 const PRIORITY: FlagInfo[] = [
-  { bits: F_RED, name: "RED", color: "#ff495e" },
-  { bits: F_CHECKERED, name: "CHECKERED", color: "#eef1f5", checker: true },
-  { bits: F_BLACK, name: "BLACK", color: "#15151c", border: "#eef1f5" },
-  { bits: F_ANY_YELLOW, name: "YELLOW", color: "#ffb43d" },
-  { bits: F_DEBRIS, name: "DEBRIS", color: "#ff8a3d" },
-  { bits: F_WHITE, name: "WHITE", color: "#eef1f5" },
-  { bits: F_BLUE, name: "BLUE", color: "#3d8bff" },
-  { bits: F_GREEN, name: "GREEN", color: "#2fe08a" },
+  { flag: "red", name: "RED", color: "#ff495e" },
+  { flag: "checkered", name: "CHECKERED", color: "#eef1f5", checker: true },
+  { flag: "black", name: "BLACK", color: "#15151c", border: "#eef1f5" },
+  { flag: "yellow", name: "YELLOW", color: "#ffb43d" },
+  { flag: "debris", name: "DEBRIS", color: "#ff8a3d" },
+  { flag: "white", name: "WHITE", color: "#eef1f5" },
+  { flag: "blue", name: "BLUE", color: "#3d8bff" },
+  { flag: "green", name: "GREEN", color: "#2fe08a" },
 ];
 
-const NO_FLAG: FlagInfo = { bits: 0, name: "NO FLAG", color: "#2fe08a", dim: true };
+const NO_FLAG: FlagInfo = { flag: "none", name: "NO FLAG", color: "#2fe08a", dim: true };
 
 const COLS = 9;
 const ROWS = 6;
@@ -60,9 +49,9 @@ function Flag({ theme, config }: BaseWidgetProps<FlagConfig>) {
   const editing = useSyncExternalStore(editModeStore.subscribe, editModeStore.get);
   const { preview } = useScreenLayer();
   const t = theme.colors;
-  const raw = slow?.flagsRaw ?? null;
+  const flag = slow?.flag ?? "none";
 
-  const active: FlagInfo = raw != null && raw !== 0 ? PRIORITY.find((f) => (raw & f.bits) !== 0) ?? NO_FLAG : NO_FLAG;
+  const active: FlagInfo = flag !== "none" ? PRIORITY.find((f) => f.flag === flag) ?? NO_FLAG : NO_FLAG;
   const glowColor = active.border ?? active.color;
   const litColor = active.color;
   const noFlag = active === NO_FLAG;

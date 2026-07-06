@@ -26,7 +26,7 @@ pub use reader::{spawn_reader, ReaderHandle};
 pub use record::RecordingConnector;
 pub use replay::ReplayConnector;
 pub use snapshot::{
-    CarState, ChangeFlags, ChatMessage, Meta, PlayerState, RaceControlMessage, Sectors,
-    SessionState, SimId, TelemetrySnapshot, TirePressures, TrackMetadata, TrackSector,
+    CarState, ChangeFlags, ChatMessage, FlagState, Meta, PlayerState, RaceControlMessage,
+    Sectors, SessionState, SimId, TelemetrySnapshot, TirePressures, TrackMetadata, TrackSector,
     TrackTurn, TrackTurnMarker,
 };

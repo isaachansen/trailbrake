@@ -1,7 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
 import { fmtLapTime, fmtDelta } from "./format";
+import { useRafDraw } from "./useRafDraw";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
+import type { FastSample, SlowSample } from "../store/types";
 
 /** Deltas beyond this magnitude are out-lap / invalid-lap artefacts. */
 const MAX_VALID_DELTA_S = 30;
@@ -32,13 +34,22 @@ function LapTimer({ theme, config }: BaseWidgetProps<LapTimerConfig>) {
   const live = useRef({ theme, config });
   live.current = { theme, config };
 
-  useEffect(() => {
-    let raf = 0;
-    const draw = () => {
-      const { theme } = live.current;
+  // Dirty-skip: everything here derives from `fast`/`slow` (lap/delta times)
+  // plus `config` (which stat rows show). `undefined`-initialized refs
+  // guarantee the first frame always paints.
+  const lastFastRef = useRef<FastSample | null | undefined>(undefined);
+  const lastSlowRef = useRef<SlowSample | null | undefined>(undefined);
+  const lastConfigRef = useRef<LapTimerConfig | undefined>(undefined);
+
+  useRafDraw(
+    () => {
+      const { theme, config } = live.current;
       const t = theme.colors;
       const fast = store.latestFast;
       const slow = store.getSlow();
+      lastFastRef.current = fast;
+      lastSlowRef.current = slow;
+      lastConfigRef.current = config;
 
       const cur = fast?.currentLapS ?? slow?.currentLapS ?? null;
       setText(curRef.current, fmtLapTime(cur));
@@ -64,12 +75,16 @@ function LapTimer({ theme, config }: BaseWidgetProps<LapTimerConfig>) {
 
       setText(deltaRef.current, deltaBestValid != null ? fmtDelta(deltaBestValid) : "--");
       setColor(deltaRef.current, deltaBestValid == null ? t.textDim : deltaBestValid < 0 ? t.gain : deltaBestValid > 0 ? t.loss : t.amber);
-
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, []);
+    },
+    {
+      fps: 10,
+      shouldDraw: () =>
+        store.latestFast !== lastFastRef.current ||
+        store.getSlow() !== lastSlowRef.current ||
+        live.current.config !== lastConfigRef.current,
+    },
+    []
+  );
 
   const cell = (label: string, ref: React.RefObject<HTMLDivElement>, initial: string) => (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, padding: "3px 2px", background: t.cell, borderRadius: theme.space.md, minWidth: 0 }}>

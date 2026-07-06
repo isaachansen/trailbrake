@@ -5,7 +5,7 @@
 
 import { TelemetryStore } from "../store/store";
 import { startBrowserMock } from "../store/mockSource";
-import type { CarEntry, FastSample, SlowSample } from "../store/types";
+import type { CarEntry, FastSample, FlagName, SlowSample } from "../store/types";
 
 const TAU = Math.PI * 2;
 
@@ -150,6 +150,7 @@ function startRejoinScenario(target: TelemetryStore): () => void {
       trackTurns: null,
       trackMetadata: null,
       flagsRaw: 0,
+      flag: "none",
       airTempC: 22,
       trackTempC: 31,
       windSpeedMs: 3.5,
@@ -280,10 +281,10 @@ function startLaunchAssistScenario(target: TelemetryStore): () => void {
 }
 
 /** Start feeding the preview store(s) with mock telemetry. Returns a stop function.
- * `flagsRawOverride` is a gallery/dev-only passthrough (see mockSource.ts) that
- * lets the widget screenshot script force a specific flag state; the manager's
- * real preview never passes it. */
-export function startPreviewMock(opts?: { flagsRawOverride?: number }): () => void {
+ * `flagsRawOverride`/`flagOverride` are gallery/dev-only passthroughs (see
+ * mockSource.ts) that let the widget screenshot script force a specific flag
+ * state; the manager's real preview never passes them. */
+export function startPreviewMock(opts?: { flagsRawOverride?: number; flagOverride?: FlagName }): () => void {
   const stops = [
     startBrowserMock(previewStore, opts),
     startRejoinScenario(scenarioStores["rejoin-indicator"]),

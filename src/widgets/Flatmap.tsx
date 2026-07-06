@@ -8,16 +8,28 @@
 import { useEffect, useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
 import { useSlow } from "../store/hooks";
+import { isLiveOverlayWindow } from "../store/windowKind";
 import { classColorMap, classColorOf } from "./raceColors";
 import { WidgetTitle } from "./WidgetTitle";
+import { useRafDraw } from "./useRafDraw";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
-import type { SlowSample } from "../store/types";
+import type { FastSample, SlowSample } from "../store/types";
 
 export interface FlatmapConfig {
   classColors: boolean;
 }
 
 const defaultConfig: FlatmapConfig = { classColors: true };
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
 
 function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
   const t = theme.colors;
@@ -39,48 +51,74 @@ function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
     }
   }
 
+  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const sizeRef = useRef({ w: 0, h: 0 });
+  // classColorMap() allocates a Map every call — cache it and only recompute
+  // when the slow sample actually changes (a handful of Hz), not every draw.
+  const lastSlowRef = useRef<SlowSample | null>(null);
+  const cmapRef = useRef(new Map<number, string>());
+
+  // Offscreen layer holding the STATIC geometry (lap line, sector ticks,
+  // start/finish posts) — purely a function of the widget's size, so it only
+  // needs rebuilding on resize. Every draw() call just `drawImage`s it back
+  // and paints the moving markers on top.
+  const offCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const offCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const staticDirtyRef = useRef(true);
+
+  // Dirty-skip bookkeeping. `forceRef` starts `true` (first frame always
+  // paints) and is re-armed by resize(). Flatmap has no eased/interpolated
+  // state (markers snap straight to the latest lapDistPct), so unlike
+  // Radar/TrackMap there's no convergence check needed — just "did the inputs
+  // change". `undefined`-initialized refs guarantee the first check mismatches.
+  const forceRef = useRef(true);
+  const lastFastRef = useRef<FastSample | null | undefined>(undefined);
+  const lastConfigRef = useRef<FlatmapConfig | undefined>(undefined);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    ctxRef.current = ctx;
 
-    let raf = 0;
-    let cssW = 0;
-    let cssH = 0;
+    if (!offCanvasRef.current) offCanvasRef.current = document.createElement("canvas");
+    const offCanvas = offCanvasRef.current;
+    const offCtx = offCanvas.getContext("2d");
+    offCtxRef.current = offCtx;
+
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      // The live overlay composites over the game at 1:1 with the desktop, so
+      // a >1 backing-store resolution buys nothing there (see
+      // isLiveOverlayWindow's doc comment) — only GPU/memory cost. The
+      // manager/gallery keep up to 2x for crisp previews on hi-DPI displays.
+      const dpr = isLiveOverlayWindow() ? 1 : Math.min(window.devicePixelRatio || 1, 2);
       const r = canvas.getBoundingClientRect();
-      cssW = r.width;
-      cssH = r.height;
-      canvas.width = Math.max(1, Math.round(cssW * dpr));
-      canvas.height = Math.max(1, Math.round(cssH * dpr));
+      sizeRef.current = { w: r.width, h: r.height };
+      canvas.width = Math.max(1, Math.round(r.width * dpr));
+      canvas.height = Math.max(1, Math.round(r.height * dpr));
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      offCanvas.width = canvas.width;
+      offCanvas.height = canvas.height;
+      offCtx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+      forceRef.current = true;
+      staticDirtyRef.current = true; // size changed — the cached bitmap is stale
     };
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
+    return () => ro.disconnect();
+  }, []);
 
-    // classColorMap() allocates a Map every call — cache it and only recompute
-    // when the slow sample actually changes (a handful of Hz), not every rAF
-    // frame (60Hz), since store.getSlow() returns a fresh reference each tick.
-    let lastSlow: SlowSample | null = null;
-    let cmap = new Map<number, string>();
-
-    const roundRect = (x: number, y: number, w: number, h: number, r: number) => {
-      ctx.beginPath();
-      ctx.moveTo(x + r, y);
-      ctx.arcTo(x + w, y, x + w, y + h, r);
-      ctx.arcTo(x + w, y + h, x, y + h, r);
-      ctx.arcTo(x, y + h, x, y, r);
-      ctx.arcTo(x, y, x + w, y, r);
-      ctx.closePath();
-    };
-
-    const draw = () => {
+  useRafDraw(
+    () => {
+      const ctx = ctxRef.current;
+      if (!ctx) return;
       const { config } = live.current;
-      const w = cssW;
-      const h = cssH;
+      forceRef.current = false;
+      lastConfigRef.current = config;
+      lastFastRef.current = store.latestFast;
+      const { w, h } = sizeRef.current;
       ctx.clearRect(0, 0, w, h);
 
       // `padX` reserves room for the start/finish posts; `inset` keeps car
@@ -99,35 +137,47 @@ function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
       const tickH = Math.max(8, Math.min(h * 0.28, 34));
       const postH = Math.max(11, Math.min(h * 0.38, 42));
 
-      // Lap line (spans the full marker range, post to post). Mid-grey (not
-      // white-alpha) so it stays visible over light backdrops too.
-      ctx.strokeStyle = "rgba(128,128,128,0.4)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(padX, lineY);
-      ctx.lineTo(w - padX, lineY);
-      ctx.stroke();
+      // Static geometry (lap line, sector ticks, start/finish posts) never
+      // changes frame-to-frame at a fixed size — paint it once into an
+      // offscreen layer and `drawImage` it back instead of re-stroking it
+      // every frame.
+      const offCtx = offCtxRef.current;
+      if (staticDirtyRef.current && offCtx) {
+        offCtx.clearRect(0, 0, w, h);
+        // Lap line (spans the full marker range, post to post). Mid-grey (not
+        // white-alpha) so it stays visible over light backdrops too.
+        offCtx.strokeStyle = "rgba(128,128,128,0.4)";
+        offCtx.lineWidth = 2;
+        offCtx.beginPath();
+        offCtx.moveTo(padX, lineY);
+        offCtx.lineTo(w - padX, lineY);
+        offCtx.stroke();
 
-      // Sector ticks.
-      ctx.strokeStyle = "rgba(128,128,128,0.45)";
-      ctx.lineWidth = 1;
-      for (const s of [1 / 3, 2 / 3]) {
-        const tx = Math.round(X(s)) + 0.5;
-        ctx.beginPath();
-        ctx.moveTo(tx, lineY - tickH);
-        ctx.lineTo(tx, lineY + tickH);
-        ctx.stroke();
+        // Sector ticks.
+        offCtx.strokeStyle = "rgba(128,128,128,0.45)";
+        offCtx.lineWidth = 1;
+        for (const s of [1 / 3, 2 / 3]) {
+          const tx = Math.round(X(s)) + 0.5;
+          offCtx.beginPath();
+          offCtx.moveTo(tx, lineY - tickH);
+          offCtx.lineTo(tx, lineY + tickH);
+          offCtx.stroke();
+        }
+        // Start/finish posts.
+        offCtx.fillStyle = "rgba(255,255,255,0.55)";
+        offCtx.fillRect(Math.round(padX) - 1.5, lineY - postH, 3, postH * 2);
+        offCtx.fillRect(Math.round(w - padX) - 1.5, lineY - postH, 3, postH * 2);
+
+        staticDirtyRef.current = false;
       }
-      // Start/finish posts.
-      ctx.fillStyle = "rgba(255,255,255,0.55)";
-      ctx.fillRect(Math.round(padX) - 1.5, lineY - postH, 3, postH * 2);
-      ctx.fillRect(Math.round(w - padX) - 1.5, lineY - postH, 3, postH * 2);
+      if (offCanvasRef.current) ctx.drawImage(offCanvasRef.current, 0, 0, w, h);
 
       const slow = store.getSlow();
-      if (slow !== lastSlow) {
-        lastSlow = slow;
-        cmap = classColorMap(slow?.cars ?? []);
+      if (slow !== lastSlowRef.current) {
+        lastSlowRef.current = slow;
+        cmapRef.current = classColorMap(slow?.cars ?? []);
       }
+      const cmap = cmapRef.current;
       const playerIdx = slow?.playerCarIdx ?? null;
 
       const marker = (f: number, color: string, r: number, player: boolean) => {
@@ -140,10 +190,10 @@ function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
         }
         // Thin dark rim keeps adjacent / overlapping same-class markers distinct.
         ctx.fillStyle = "rgba(15,18,24,0.85)";
-        roundRect(cx - r - 1, lineY - r - 1, 2 * r + 2, 2 * r + 2, (r + 1) * 0.55);
+        roundRect(ctx, cx - r - 1, lineY - r - 1, 2 * r + 2, 2 * r + 2, (r + 1) * 0.55);
         ctx.fill();
         ctx.fillStyle = color;
-        roundRect(cx - r, lineY - r, 2 * r, 2 * r, r * 0.55);
+        roundRect(ctx, cx - r, lineY - r, 2 * r, 2 * r, r * 0.55);
         ctx.fill();
       };
 
@@ -167,15 +217,17 @@ function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
         slow?.cars.find((c) => c.isPlayer || c.carIdx === playerIdx)?.lapDistPct ??
         null;
       if (pPct != null && pPct >= 0) marker(pPct, t.accent, playerR, true);
-
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-    return () => {
-      cancelAnimationFrame(raf);
-      ro.disconnect();
-    };
-  }, [t.accent, store]);
+    },
+    {
+      fps: 24,
+      shouldDraw: () =>
+        forceRef.current ||
+        store.latestFast !== lastFastRef.current ||
+        store.getSlow() !== lastSlowRef.current ||
+        live.current.config !== lastConfigRef.current,
+    },
+    []
+  );
 
   const legendDot = (label: string, color: string) => (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color, fontWeight: 600, fontSize: "0.62em" }}>● {label}</span>

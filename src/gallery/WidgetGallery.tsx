@@ -13,9 +13,13 @@
 //   scale=<n>                      → widget font/density multiplier (instance `scale`)
 //   opacity=<0..1>                 → panel opacity (instance `opacity`)
 //   config=<json>                  → JSON object merged over the widget's defaultConfig
-//   flags=<n>                      → dev-only: force slow.flagsRaw to this irsdk_Flags
-//                                    bitfield (decimal or 0x-hex), for capturing the
-//                                    Flag widget's individual states
+//   flags=<n>                      → dev-only: force slow.flagsRaw (and slow.flag,
+//                                    derived from it) to this irsdk_Flags bitfield
+//                                    (decimal or 0x-hex), for capturing the Flag
+//                                    widget's individual states
+//   flag=<name>                    → dev-only: force slow.flag directly to a
+//                                    sim-neutral name (e.g. `yellow`), simpler
+//                                    than `flags=<n>`; wins if both are given
 //
 // The capture script (`scripts/shoot-widgets.mjs`) reads `window.__WIDGETS__`
 // for the registry list and screenshots the element marked `data-widget-shot`.
@@ -31,6 +35,7 @@ import { previewStoreFor, startPreviewMock } from "../manager/previewStore";
 import { allWidgetDefs, getWidgetDef } from "../widgets/registry";
 import { widgetMeta } from "../manager/widgetMeta";
 import type { WidgetDefinition } from "../widgets/contract";
+import type { FlagName } from "../store/types";
 
 const theme = defaultTheme;
 
@@ -253,11 +258,14 @@ export default function WidgetGallery() {
   } catch {
     configOverride = undefined;
   }
-  // Dev-only: `flags=0x10` (or decimal) forces slow.flagsRaw so the capture
-  // script can screenshot each Flag widget state individually — the mock
-  // otherwise always reports a fixed blue flag. Accepts 0x-hex or decimal.
+  // Dev-only: `flags=0x10` (or decimal) forces slow.flagsRaw (and, derived from
+  // it, slow.flag) so the capture script can screenshot each Flag widget state
+  // individually — the mock otherwise always reports a fixed debris flag.
+  // Accepts 0x-hex or decimal. `flag=<name>` (e.g. `flag=yellow`) is the
+  // simpler sim-neutral alternative and wins if both are given.
   const flagsParam = params.get("flags");
   const flagsRawOverride = flagsParam != null ? Number(flagsParam) : undefined;
+  const flagOverride = (params.get("flag") as FlagName | null) ?? undefined;
 
   const [ready, setReady] = useState(false);
 
@@ -273,7 +281,7 @@ export default function WidgetGallery() {
     const prev = targets.map((el) => el?.style.overflow ?? "");
     targets.forEach((el) => el && (el.style.overflow = "visible"));
 
-    const stop = startPreviewMock({ flagsRawOverride });
+    const stop = startPreviewMock({ flagsRawOverride, flagOverride });
     (window as unknown as { __WIDGETS__: unknown }).__WIDGETS__ = allWidgetDefs().map((d) => ({
       id: d.id,
       name: d.name,

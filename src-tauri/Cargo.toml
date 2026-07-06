@@ -42,3 +42,7 @@ vr = ["vr-overlay/vr"]
 
 [target.'cfg(windows)'.dependencies]
 iracing-connector = { workspace = true }
+lmu-connector = { workspace = true }
+# Registry reads to locate the Steam install (for LMU auto-detection in the
+# guided rF2 Shared Memory Map Plugin setup — see lmu_plugin.rs).
+winreg = "0.55"

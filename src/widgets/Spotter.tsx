@@ -17,14 +17,16 @@
 // neighbour offsets. A single rAF loop pokes the bar/edge opacity through refs —
 // no React re-render.
 
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { createPortal } from "react-dom";
 import { useStoreInstance } from "../store/storeContext";
 import { useScreenLayer } from "../components/screenLayer";
 import { useSettings } from "../store/appSettings";
 import { glassChrome, GlassSpecular } from "../components/liquidGlass";
+import { useRafDraw } from "./useRafDraw";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 import type { Theme } from "../theme/theme";
+import type { FastSample, SlowSample } from "../store/types";
 import { hexToRgba } from "./format";
 
 export type SpotterDisplay = "both" | "widget" | "edges";
@@ -102,9 +104,19 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
   const showWidget = config.display !== "edges";
   const showEdges = config.display !== "widget";
 
-  useEffect(() => {
-    let raf = 0;
-    const draw = (now: number) => {
+  // Dirty-skip (live mode only — the preview demo below is a pure time-based
+  // animation with no telemetry to gate on, so it always draws). `wasActiveRef`
+  // starts `true` so the very first frame always paints; it's set to whether a
+  // car was alongside after each real draw, so the pulse keeps animating for
+  // as long as a warning is active and one extra frame after it clears (to
+  // paint the "back to idle" state), then goes quiet.
+  const lastFastRef = useRef<FastSample | null | undefined>(undefined);
+  const lastSlowRef = useRef<SlowSample | null | undefined>(undefined);
+  const lastConfigRef = useRef<SpotterConfig | undefined>(undefined);
+  const wasActiveRef = useRef(true);
+
+  useRafDraw(
+    (now) => {
       const { config, preview } = live.current;
 
       // Manager/gallery preview: there's no live "car alongside" to react to, so
@@ -135,11 +147,13 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
           panelRef.current.style.transform = "scale(1)";
         }
         setCaption(captionRef.current, l > 0.5, r > 0.5, t);
-        raf = requestAnimationFrame(draw);
         return;
       }
 
       const slow = store.getSlow();
+      lastFastRef.current = store.latestFast;
+      lastSlowRef.current = slow;
+      lastConfigRef.current = config;
       const playerIdx = slow?.playerCarIdx ?? null;
       let warnL = false;
       let warnR = false;
@@ -191,11 +205,19 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
       if (edgeLeftRef.current) edgeLeftRef.current.style.opacity = warnL ? pulse : "0";
       if (edgeRightRef.current) edgeRightRef.current.style.opacity = warnR ? pulse : "0";
 
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [store, t]);
+      wasActiveRef.current = alongside;
+    },
+    {
+      fps: 15,
+      shouldDraw: () =>
+        live.current.preview ||
+        store.latestFast !== lastFastRef.current ||
+        store.getSlow() !== lastSlowRef.current ||
+        live.current.config !== lastConfigRef.current ||
+        wasActiveRef.current,
+    },
+    []
+  );
 
   // The bar is a neutral outline/tint pill that's always visible (so idle never
   // reads as a dim, muddy red — a red-on-light-bg problem at low opacity), with

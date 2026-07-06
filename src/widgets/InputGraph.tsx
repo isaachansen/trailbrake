@@ -10,8 +10,10 @@
 import { useEffect, useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
 import { useSettings } from "../store/appSettings";
+import { isLiveOverlayWindow } from "../store/windowKind";
 import { speedValue, speedLabel } from "./format";
 import { GEAR_COLOR_PRESETS } from "./raceColors";
+import { useRafDraw } from "./useRafDraw";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface InputGraphConfig {
@@ -57,35 +59,51 @@ function InputGraph({ theme, config }: BaseWidgetProps<InputGraphConfig>) {
   const liveRef = useRef({ theme, config, units });
   liveRef.current = { theme, config, units };
 
+  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const sizeRef = useRef({ w: 0, h: 0 });
+  const fpsCounterRef = useRef({ frames: 0, lastFpsAt: 0 });
+
+  // Dirty-skip bookkeeping. `forceRef` starts `true` (guarantees the first
+  // frame paints) and is re-armed by resize() so a widget resize/DPR change is
+  // never skipped even without new telemetry. `undefined`-initialized refs for
+  // the telemetry/config comparisons guarantee their first check also mismatches.
+  const forceRef = useRef(true);
+  const lastFastRef = useRef<typeof store.latestFast | undefined>(undefined);
+  const lastConfigRef = useRef<InputGraphConfig | undefined>(undefined);
+  const lastUnitsRef = useRef<typeof units | undefined>(undefined);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-
-    let raf = 0;
-    let frames = 0;
-    let lastFpsAt = performance.now();
-    let cssW = 0;
-    let cssH = 0;
+    ctxRef.current = ctx;
 
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = isLiveOverlayWindow() ? 1 : Math.min(window.devicePixelRatio || 1, 2);
       const rect = canvas.getBoundingClientRect();
-      cssW = rect.width;
-      cssH = rect.height;
-      canvas.width = Math.max(1, Math.round(cssW * dpr));
-      canvas.height = Math.max(1, Math.round(cssH * dpr));
+      sizeRef.current = { w: rect.width, h: rect.height };
+      canvas.width = Math.max(1, Math.round(rect.width * dpr));
+      canvas.height = Math.max(1, Math.round(rect.height * dpr));
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      forceRef.current = true;
     };
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
+    return () => ro.disconnect();
+  }, []);
 
-    const draw = () => {
+  useRafDraw(
+    (now) => {
+      const ctx = ctxRef.current;
+      if (!ctx) return;
       const { theme, config, units } = liveRef.current;
-      const w = cssW;
-      const h = cssH;
+      forceRef.current = false;
+      lastFastRef.current = store.latestFast;
+      lastConfigRef.current = config;
+      lastUnitsRef.current = units;
+      const { w, h } = sizeRef.current;
       ctx.clearRect(0, 0, w, h);
 
       const history = store.history;
@@ -214,22 +232,24 @@ function InputGraph({ theme, config }: BaseWidgetProps<InputGraphConfig>) {
         setText(speedRef.current, sv == null ? "--" : String(Math.round(sv)));
       }
 
-      frames++;
-      const now = performance.now();
-      if (now - lastFpsAt >= 500) {
-        store.graphFps = (frames * 1000) / (now - lastFpsAt);
-        frames = 0;
-        lastFpsAt = now;
+      const fc = fpsCounterRef.current;
+      if (fc.lastFpsAt === 0) fc.lastFpsAt = now;
+      fc.frames++;
+      if (now - fc.lastFpsAt >= 500) {
+        store.graphFps = (fc.frames * 1000) / (now - fc.lastFpsAt);
+        fc.frames = 0;
+        fc.lastFpsAt = now;
       }
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-
-    return () => {
-      cancelAnimationFrame(raf);
-      ro.disconnect();
-    };
-  }, []);
+    },
+    {
+      shouldDraw: () =>
+        forceRef.current ||
+        store.latestFast !== lastFastRef.current ||
+        liveRef.current.config !== lastConfigRef.current ||
+        liveRef.current.units !== lastUnitsRef.current,
+    },
+    []
+  );
 
   const barTrack: React.CSSProperties = {
     width: 10,

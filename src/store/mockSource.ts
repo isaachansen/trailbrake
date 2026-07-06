@@ -4,7 +4,37 @@
 // (number, country, license, iRating, tyre, …) for the standings/relative widgets.
 
 import { store, type TelemetryStore } from "./store";
-import type { CarEntry, FastSample, SlowSample } from "./types";
+import type { CarEntry, FastSample, FlagName, SlowSample } from "./types";
+
+// iRacing `irsdk_Flags` bitfield — used ONLY here, to translate the gallery's
+// dev-only `flags=<n>` override (a raw bitfield, for continuity with the old
+// capture workflow) into the sim-neutral `FlagName` the store now carries.
+// Priority mirrors the backend's FlagState decode / Flag.tsx's old PRIORITY
+// table: red > checkered > black > yellow family > debris > white > blue > green.
+const IR_F_CHECKERED = 0x00000001;
+const IR_F_WHITE = 0x00000002;
+const IR_F_GREEN = 0x00000004;
+const IR_F_YELLOW = 0x00000008;
+const IR_F_RED = 0x00000010;
+const IR_F_BLUE = 0x00000020;
+const IR_F_DEBRIS = 0x00000040;
+const IR_F_YELLOW_WAVING = 0x00000100;
+const IR_F_CAUTION = 0x00004000;
+const IR_F_CAUTION_WAVING = 0x00008000;
+const IR_F_BLACK = 0x00010000;
+const IR_F_ANY_YELLOW = IR_F_YELLOW | IR_F_YELLOW_WAVING | IR_F_CAUTION | IR_F_CAUTION_WAVING;
+
+function flagNameFromRaw(raw: number): FlagName {
+  if (raw & IR_F_RED) return "red";
+  if (raw & IR_F_CHECKERED) return "checkered";
+  if (raw & IR_F_BLACK) return "black";
+  if (raw & IR_F_ANY_YELLOW) return "yellow";
+  if (raw & IR_F_DEBRIS) return "debris";
+  if (raw & IR_F_WHITE) return "white";
+  if (raw & IR_F_BLUE) return "blue";
+  if (raw & IR_F_GREEN) return "green";
+  return "none";
+}
 
 const TAU = Math.PI * 2;
 const LAP_SECONDS = 90;
@@ -199,10 +229,12 @@ function seedFastHistory(target: TelemetryStore): void {
 export function startBrowserMock(
   target: TelemetryStore = store,
   // Gallery/dev-only: lets the widget screenshot script force a specific
-  // irsdk_Flags bitfield (e.g. to capture the Flag widget's RED/CHECKERED/etc
-  // states) without inventing a whole scenario store for it. Unused in the real
-  // app and the manager preview, where it's always undefined.
-  opts?: { flagsRawOverride?: number }
+  // flag state (e.g. to capture the Flag widget's RED/CHECKERED/etc states)
+  // without inventing a whole scenario store for it. Unused in the real app
+  // and the manager preview, where both are always undefined.
+  // `flagsRawOverride` keeps the old raw-bitfield entry point working;
+  // `flagOverride` is the simpler sim-neutral name and wins if both are set.
+  opts?: { flagsRawOverride?: number; flagOverride?: FlagName }
 ): () => void {
   target.setCaps({
     clutch: true,
@@ -395,7 +427,8 @@ export function startBrowserMock(
       trackTurns: TRACK_TURNS,
       trackMetadata: null,
       // Weather.
-      flagsRaw: opts?.flagsRawOverride ?? 0x40, // blue flag (faster car behind — let them pass)
+      flagsRaw: opts?.flagsRawOverride ?? 0x40, // debris flag by default
+      flag: opts?.flagOverride ?? flagNameFromRaw(opts?.flagsRawOverride ?? 0x40),
       airTempC: 22,
       trackTempC: 31,
       windSpeedMs: 3.5,
