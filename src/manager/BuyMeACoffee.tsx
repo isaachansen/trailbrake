@@ -7,29 +7,18 @@
 // it explicitly via the opener plugin; in plain-browser dev mode (no Tauri
 // runtime) `window.open` already does the right thing.
 
-import type { MouseEvent } from "react";
-import { isTauri } from "../store/transport";
+import { openExternalUrl } from "./openExternalUrl";
 
 const BMC_URL = "https://www.buymeacoffee.com/trailbrake";
 const BMC_IMG =
   "https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=trailbrake" +
   "&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00";
 
-async function openBmc(e: MouseEvent) {
-  e.preventDefault();
-  if (isTauri()) {
-    const { openUrl } = await import("@tauri-apps/plugin-opener");
-    await openUrl(BMC_URL);
-  } else {
-    window.open(BMC_URL, "_blank", "noopener");
-  }
-}
-
 export function BuyMeACoffee() {
   return (
     <a
       href={BMC_URL}
-      onClick={openBmc}
+      onClick={(e) => void openExternalUrl(BMC_URL, e)}
       title="Support Trailbrake on Buy Me a Coffee"
       style={{ cursor: "pointer" }}
     >

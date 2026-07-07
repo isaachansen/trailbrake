@@ -13,6 +13,7 @@ import { ACCENT_PRESETS } from "../accent";
 import { ColorWheel } from "../ColorWheel";
 import { SoftwareUpdates } from "./SoftwareUpdates";
 import { BuyMeACoffee } from "../BuyMeACoffee";
+import { Feedback } from "../Feedback";
 
 const VR_BACKENDS: { value: VrBackendKind; label: string }[] = [
   { value: "auto", label: "Auto (OpenVR, then OpenXR)" },
@@ -371,6 +372,18 @@ export function SettingsPage() {
       </div>
 
       <SoftwareUpdates />
+
+      <div className="card">
+        <div className="card-title">Feedback</div>
+        <p className="card-desc">
+          Opens a GitHub issue in your browser — no account needed to read, but you&apos;ll need one to submit.
+          Report bugs, request widgets or sim support, or leave general feedback. Issues are public and help
+          shape what gets built next.
+        </p>
+        <div style={{ marginTop: 12 }}>
+          <Feedback />
+        </div>
+      </div>
 
       <div className="card">
         <div className="card-title">Support Trailbrake</div>
