@@ -15,6 +15,7 @@ import {
   checkForUpdate,
   type DownloadProgress,
   type UpdateInfo,
+  updatesSupported,
 } from "./updater";
 
 export type UpdatePhase = "idle" | "checking" | "available" | "downloading" | "uptodate" | "error";
@@ -25,6 +26,9 @@ export interface UpdateFlowState {
   progress: DownloadProgress | null;
   error: string;
 }
+
+const INITIAL_CHECK_DELAY_MS = 3000; // let boot (transport/layout/settings init) settle first
+const RECHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 // Hoisted to module scope (not component state): either surface can be
 // unmounted and remounted mid-check/mid-download (Settings page navigated
@@ -72,6 +76,23 @@ export async function install() {
   }
 }
 
+// Module-scoped so React.StrictMode's dev double-invoke of effects (or the
+// manager ever mounting twice) doesn't fire two overlapping check loops.
+let autoCheckStarted = false;
+
+/** Arm the startup + periodic update checks. Call once from the manager shell. */
+export function startAutoUpdateCheck(): void {
+  if (!updatesSupported() || autoCheckStarted) return;
+  autoCheckStarted = true;
+
+  // Deliberately no teardown: the timers are one-shot-armed for the app's
+  // lifetime (the guard above never resets), so tearing them down on
+  // StrictMode's mount→cleanup→remount cycle would leave no check loop at
+  // all — the re-run bails on the guard before re-arming.
+  setTimeout(() => void check(), INITIAL_CHECK_DELAY_MS);
+  setInterval(() => void check(), RECHECK_INTERVAL_MS);
+}
+
 /** React binding for the shared update-flow state. */
 export function useUpdateFlow(): UpdateFlowState {
   return useSyncExternalStore(subscribe, getSnapshot);
@@ -83,8 +104,7 @@ export function useUpdateFlow(): UpdateFlowState {
 // impossible to screenshot or eyeball during review. `?mockUpdate=0.3.0`
 // (optionally `&mockPhase=downloading`) seeds this store with a fake
 // UpdateInfo so the browser dev shell renders it. Never called from the
-// packaged app — see the isTauri() guard at the call site in
-// manager/UpdateToast.tsx.
+// packaged app — see the isTauri() guard at the call site in ManagerApp.tsx.
 // ---------------------------------------------------------------------------
 export function seedMockUpdateFromQuery(search: string): boolean {
   const params = new URLSearchParams(search);

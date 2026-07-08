@@ -8,6 +8,8 @@
 //!
 //! Parsed **only when `sessionInfoUpdate` changes**, never per frame.
 
+use std::collections::HashMap;
+
 /// Per-driver info from `DriverInfo.Drivers`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DriverEntry {
@@ -61,6 +63,11 @@ pub struct SessionInfoMin {
     /// Track length (meters) from `WeekendInfo:TrackLength` ("X.XX km"). Used to
     /// turn the pit-stall track-fraction into a distance.
     pub track_length_m: Option<f32>,
+    /// Grid / results positions from `SessionInfo.Sessions[].ResultsPositions[]`,
+    /// keyed by `(SessionNum, CarIdx) → (Position, ClassPosition)`. Populated as
+    /// qualifying completes and when the race grid is formed — fills the gap
+    /// before live `CarIdxPosition` is trustworthy.
+    pub session_positions: HashMap<(i32, u32), (u32, u32)>,
 }
 
 impl SessionInfoMin {
@@ -71,6 +78,12 @@ impl SessionInfoMin {
         num.and_then(|n| self.session_types.iter().find(|(sn, _)| *sn == n))
             .or_else(|| self.session_types.first())
             .map(|(_, label)| label.clone())
+    }
+
+    /// Results/grid position for a car in a given session, when the YAML block
+    /// has been published (post-qualify grid, live qual results, etc.).
+    pub fn session_position(&self, session_num: i32, car_idx: u32) -> Option<(u32, u32)> {
+        self.session_positions.get(&(session_num, car_idx)).copied()
     }
 }
 
@@ -181,6 +194,7 @@ pub fn parse_min(yaml: &str) -> SessionInfoMin {
         track_length_m: scan_value(yaml, "TrackLength")
             .and_then(|s| parse_leading_f32(&s))
             .map(|km| km * 1000.0),
+        session_positions: scan_session_positions(yaml),
     };
 
     let lines: Vec<&str> = yaml.lines().collect();
@@ -238,6 +252,10 @@ pub fn parse_min(yaml: &str) -> SessionInfoMin {
                     d.car_screen_name = Some(unquote(x));
                 } else if let Some(x) = dt.strip_prefix("CarNumber:") {
                     d.car_number = Some(unquote(x));
+                } else if let Some(x) = dt.strip_prefix("CarNumberRaw:") {
+                    if d.car_number.is_none() {
+                        d.car_number = Some(x.trim().to_string());
+                    }
                 } else if let Some(x) = dt.strip_prefix("CarClassShortName:") {
                     d.car_class_name = Some(unquote(x));
                 } else if let Some(x) = dt.strip_prefix("CarClassID:") {
@@ -410,6 +428,93 @@ fn scan_session_types(yaml: &str) -> Vec<(i32, String)> {
     out
 }
 
+fn flush_result_entry(
+    out: &mut HashMap<(i32, u32), (u32, u32)>,
+    session_num: Option<i32>,
+    cur_car: &mut Option<u32>,
+    cur_pos: &mut Option<u32>,
+    cur_class: &mut Option<u32>,
+) {
+    if let (Some(sn), Some(ci), Some(p)) = (session_num, cur_car.take(), cur_pos.take()) {
+        let cp = cur_class.take().unwrap_or(p);
+        out.insert((sn, ci), (p, cp));
+    } else {
+        *cur_car = None;
+        *cur_pos = None;
+        *cur_class = None;
+    }
+}
+
+/// Extract grid/results positions from each session's `ResultsPositions[]` block.
+fn scan_session_positions(yaml: &str) -> HashMap<(i32, u32), (u32, u32)> {
+    let lines: Vec<&str> = yaml.lines().collect();
+    let mut out: HashMap<(i32, u32), (u32, u32)> = HashMap::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if indent(lines[i]) == 0 && lines[i].trim_start().starts_with("SessionInfo:") {
+            i += 1;
+            break;
+        }
+        i += 1;
+    }
+
+    let mut session_num: Option<i32> = None;
+    let mut in_results = false;
+    let mut results_indent = 0;
+    let mut entry_indent = 0;
+    let mut cur_car: Option<u32> = None;
+    let mut cur_pos: Option<u32> = None;
+    let mut cur_class: Option<u32> = None;
+
+    while i < lines.len() {
+        let line = lines[i];
+        if !line.trim().is_empty() && indent(line) == 0 {
+            break;
+        }
+        let ind = indent(line);
+        let t = line.trim_start();
+
+        if let Some(v) = t.strip_prefix("- SessionNum:") {
+            flush_result_entry(&mut out, session_num, &mut cur_car, &mut cur_pos, &mut cur_class);
+            in_results = false;
+            session_num = v.trim().parse().ok();
+        } else if t.starts_with("ResultsPositions:") {
+            flush_result_entry(&mut out, session_num, &mut cur_car, &mut cur_pos, &mut cur_class);
+            in_results = true;
+            results_indent = ind;
+            entry_indent = 0;
+        } else if in_results {
+            let leave_results = ind < results_indent
+                || (ind == results_indent && !t.starts_with("- ") && !t.starts_with("ResultsPositions:"));
+            if leave_results {
+                flush_result_entry(&mut out, session_num, &mut cur_car, &mut cur_pos, &mut cur_class);
+                in_results = false;
+            } else if t.starts_with("- ") {
+                flush_result_entry(&mut out, session_num, &mut cur_car, &mut cur_pos, &mut cur_class);
+                entry_indent = ind;
+                if let Some(x) = t.strip_prefix("- Position:") {
+                    cur_pos = x.trim().parse().ok();
+                } else if let Some(x) = t.strip_prefix("- CarIdx:") {
+                    cur_car = x.trim().parse().ok();
+                } else if let Some(x) = t.strip_prefix("- ClassPosition:") {
+                    cur_class = x.trim().parse().ok();
+                }
+            } else if entry_indent > 0 && ind > entry_indent {
+                if let Some(x) = t.strip_prefix("Position:") {
+                    cur_pos = x.trim().parse().ok();
+                } else if let Some(x) = t.strip_prefix("ClassPosition:") {
+                    cur_class = x.trim().parse().ok();
+                } else if let Some(x) = t.strip_prefix("CarIdx:") {
+                    cur_car = x.trim().parse().ok();
+                }
+            }
+        }
+        i += 1;
+    }
+    flush_result_entry(&mut out, session_num, &mut cur_car, &mut cur_pos, &mut cur_class);
+    out
+}
+
 /// Map iRacing session type strings to a coarse label widgets can switch on.
 fn normalize_session_type(raw: &str) -> String {
     let r = raw.trim();
@@ -509,6 +614,52 @@ SplitTimeInfo:
         let yaml = "---\nDriverInfo:\n DriverCarIdx: 0\n Drivers:\n - CarIdx: 0\n   UserName: A\n";
         let info = parse_min(yaml);
         assert_eq!(info.car_est_lap_time, None);
+    }
+
+    #[test]
+    fn parses_car_number_raw_when_car_number_missing() {
+        let yaml = "---\nDriverInfo:\n DriverCarIdx: 0\n Drivers:\n - CarIdx: 0\n   UserName: A\n   CarNumberRaw: 64\n";
+        let info = parse_min(yaml);
+        assert_eq!(info.drivers[0].car_number.as_deref(), Some("64"));
+    }
+
+    #[test]
+    fn car_number_wins_over_car_number_raw() {
+        let yaml = "---\nDriverInfo:\n DriverCarIdx: 0\n Drivers:\n - CarIdx: 0\n   UserName: A\n   CarNumber: \"064\"\n   CarNumberRaw: 64\n";
+        let info = parse_min(yaml);
+        assert_eq!(info.drivers[0].car_number.as_deref(), Some("064"));
+    }
+
+    #[test]
+    fn parses_results_positions_per_session() {
+        let yaml = "\
+---
+SessionInfo:
+ Sessions:
+ - SessionNum: 1
+   SessionType: Lone_Qualify
+   ResultsPositions:
+   - Position: 1
+     ClassPosition: 1
+     CarIdx: 5
+   - Position: 2
+     ClassPosition: 2
+     CarIdx: 12
+ - SessionNum: 2
+   SessionType: Race
+   ResultsPositions:
+   - Position: 1
+     ClassPosition: 1
+     CarIdx: 12
+   - Position: 2
+     ClassPosition: 2
+     CarIdx: 5
+";
+        let info = parse_min(yaml);
+        assert_eq!(info.session_position(1, 5), Some((1, 1)));
+        assert_eq!(info.session_position(1, 12), Some((2, 2)));
+        assert_eq!(info.session_position(2, 12), Some((1, 1)));
+        assert_eq!(info.session_position(2, 5), Some((2, 2)));
     }
 
     #[test]

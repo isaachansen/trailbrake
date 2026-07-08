@@ -5,10 +5,11 @@
 
 import { useEffect, useState } from "react";
 import "./manager.css";
-import { initTransport } from "../store/transport";
+import { initTransport, isTauri } from "../store/transport";
 import { layoutStore } from "../store/layout";
 import { settingsStore, useSettings } from "../store/appSettings";
 import { controls } from "../store/controls";
+import { seedMockUpdateFromQuery, startAutoUpdateCheck } from "../store/updateFlow";
 import { accentVars } from "./accent";
 import { LiquidGlassFilter } from "../components/liquidGlass";
 import { NavRail, TopBar, type Page } from "./shell";
@@ -31,6 +32,13 @@ export default function ManagerApp() {
     void layoutStore.init();
     void settingsStore.init();
     void controls.fetchStatus();
+
+    if (!isTauri() && seedMockUpdateFromQuery(window.location.search)) {
+      // Dev-only ?mockUpdate= preview — skip the real check loop.
+    } else {
+      startAutoUpdateCheck();
+    }
+
     return () => {
       cancelled = true;
       cleanup?.();
@@ -49,7 +57,7 @@ export default function ManagerApp() {
           {page === "settings" && <SettingsPage />}
         </main>
       </div>
-      <UpdateToast />
+      <UpdateToast themeStyle={accentVars(settings.accentColor)} />
     </div>
   );
 }

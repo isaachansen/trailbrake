@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Core + event + global-shortcut + updater/process access for the manager window (settings, hotkey capture, update flow, relaunch). Also scoped opener access, just for the Buy Me a Coffee link. The overlay window gets a narrower grant — see capabilities/overlay.json — since it never drives any of those plugins from its webview.",
+  "description": "Core + event + global-shortcut + updater/process access for the manager window (settings, hotkey capture, update flow, relaunch). Also scoped opener access for external links (Buy Me a Coffee, GitHub feedback). The overlay window gets a narrower grant — see capabilities/overlay.json — since it never drives any of those plugins from its webview.",
   "windows": ["manager"],
   "permissions": [
     "core:default",
@@ -12,7 +12,10 @@
     "process:default",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "https://www.buymeacoffee.com/*" }]
+      "allow": [
+        { "url": "https://www.buymeacoffee.com/*" },
+        { "url": "https://github.com/isaachansen/trailbrake/*" }
+      ]
     }
   ]
 }

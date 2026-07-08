@@ -4,7 +4,8 @@
    overlay itself stays minimal/flat for perf; the manager is richer since it
    never composites over the game. */
 
-.mgr {
+.mgr,
+.update-toast-host {
   /* surfaces */
   --bg: #08090c;
   --panel: linear-gradient(180deg, #13151b, #0e1014);
@@ -46,7 +47,9 @@
   --radius-lg: 20px;
   --radius-card: 18px;
   --radius-sm: 10px;
+}
 
+.mgr {
   position: fixed;
   inset: 0;
   display: flex;

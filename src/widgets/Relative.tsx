@@ -11,7 +11,7 @@
 // reorderable, per-session-type-toggleable set of telemetry fields (session,
 // position, lap times, fuel, …) configured from the settings panel.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSlow } from "../store/hooks";
 import { useSettings } from "../store/appSettings";
 import { fmtGap, fmtLapTime, fmtDelta, hexToRgba, fuelValue, fuelLabel, tempValue, tempLabel, type UnitSystem } from "./format";
@@ -22,6 +22,7 @@ import { TyreBadge } from "./TyreBadge";
 import { PitBadge } from "./PitBadge";
 import { CarIcon, carIconFor, iracingIcon } from "./carIcons";
 import type { CarEntry, SlowSample } from "../store/types";
+import { buildProvisionalPositions, relativePosOf } from "./provisionalPos";
 import { classifySessionType } from "./contract";
 import type { BaseWidgetProps, InfoFieldConfig, SessionType, WidgetDefinition } from "./contract";
 import type { Theme } from "../theme/theme";
@@ -31,6 +32,10 @@ export interface RelativeConfig {
   rowsBehind: number;
   /** Hide cars more than this many seconds ahead/behind. */
   windowSeconds: number;
+  /** Multiplier for header/footer info-chip size (independent of row scale). */
+  fieldScale: number;
+  /** Multiplier for car-row height and typography (independent of field scale). */
+  rowScale: number;
   showFlag: boolean;
   showLicense: boolean;
   showIrating: boolean;
@@ -113,6 +118,8 @@ const defaultConfig: RelativeConfig = {
   rowsAhead: 4,
   rowsBehind: 4,
   windowSeconds: 30,
+  fieldScale: 1,
+  rowScale: 1,
   showFlag: true,
   showLicense: true,
   showIrating: true,
@@ -124,7 +131,7 @@ const defaultConfig: RelativeConfig = {
 };
 
 const ROWH = 2.25; // em — slot height; rows animate their `top` between slots.
-const SLIDE_MS = 400; // position-swap glide (F1 timing-tower feel)
+const SLIDE_MS = 180; // position-swap glide — keep under the ~200ms slow tick so rows don't lag live order
 const ENTER_MS = 240; // fade-in when a car enters the visible window
 const EXIT_MS = 240; // fade-out when a car leaves the visible window
 const FLASH_MS = 900; // brief gain/loss tint after a position change
@@ -137,10 +144,10 @@ function visibleChips(entries: InfoFieldConfig[] | undefined, slow: SlowSample |
     .filter((x): x is { def: InfoFieldDef; value: string } => x.def != null && x.value != null);
 }
 
-function InfoBar({ chips, color, dim, mono }: { chips: { def: InfoFieldDef; value: string }[]; color: string; dim: string; mono: string }) {
+function InfoBar({ chips, color, dim, mono, scale }: { chips: { def: InfoFieldDef; value: string }[]; color: string; dim: string; mono: string; scale: number }) {
   if (chips.length === 0) return null;
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.45em 0.9em", padding: "0 0.6em", fontSize: "0.7em" }}>
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.45em 0.9em", padding: "0 0.6em", fontSize: `${0.7 * scale}em` }}>
       {chips.map(({ def, value }) => (
         <span key={def.key} title={def.label} style={{ display: "inline-flex", alignItems: "center", gap: "0.42em", whiteSpace: "nowrap" }}>
           <span style={{ color: dim, display: "inline-flex" }}><InfoIcon name={def.key} /></span>
@@ -251,6 +258,7 @@ function PositionFlash({ event, color }: { event: HighlightEvent; color: string 
 interface RelativeRowProps {
   car: CarEntry;
   slot: number;
+  rowH: number;
   exiting: boolean;
   isPlayer: boolean;
   pos: number | null;
@@ -271,7 +279,7 @@ interface RelativeRowProps {
  *  re-created every parent render) purely so it can own the tiny bit of local
  *  state an enter fade needs: render invisible on mount, then flip to visible
  *  next paint so the opacity transition actually plays. */
-function RelativeRow({ car, slot, exiting, isPlayer, pos, provisional, gap, inPit, lic, t, mono, ccol, has, cols, highlight, onExited }: RelativeRowProps) {
+function RelativeRow({ car, slot, rowH, exiting, isPlayer, pos, provisional, gap, inPit, lic, t, mono, ccol, has, cols, highlight, onExited }: RelativeRowProps) {
   const [entered, setEntered] = useState(false);
   useEffect(() => {
     const raf = requestAnimationFrame(() => setEntered(true));
@@ -292,8 +300,8 @@ function RelativeRow({ car, slot, exiting, isPlayer, pos, provisional, gap, inPi
         position: "absolute",
         left: 0,
         right: 0,
-        top: `${slot * ROWH}em`,
-        height: `${ROWH - 0.2}em`,
+        top: `${slot * rowH}em`,
+        height: `${rowH - 0.2}em`,
         display: "grid",
         gridTemplateColumns: cols,
         alignItems: "center",
@@ -400,35 +408,11 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
   // iRacing seeds the starting order by iRating, so we reproduce that: rank the
   // field by iRating (descending), both overall and within class, and use it only
   // as a fallback — a real position from the sim always wins once it exists.
-  const { provPos, provClassPos } = useMemo(() => {
-    const rated = (slow?.cars ?? []).filter((c) => c.irating != null);
-    const provPos = new Map<number, number>();
-    [...rated]
-      .sort((a, b) => (b.irating ?? 0) - (a.irating ?? 0))
-      .forEach((c, i) => provPos.set(c.carIdx, i + 1));
-    const provClassPos = new Map<number, number>();
-    const byClass = new Map<number, CarEntry[]>();
-    for (const c of rated) {
-      const k = c.carClassId ?? 0;
-      let g = byClass.get(k);
-      if (!g) { g = []; byClass.set(k, g); }
-      g.push(c);
-    }
-    for (const g of byClass.values()) {
-      g.sort((a, b) => (b.irating ?? 0) - (a.irating ?? 0));
-      g.forEach((c, i) => provClassPos.set(c.carIdx, i + 1));
-    }
-    return { provPos, provClassPos };
-  }, [slow?.cars]);
+  const { provPos, provClassPos } = useMemo(() => buildProvisionalPositions(slow?.cars ?? []), [slow?.cars]);
 
   /** A car's shown position: real (class, then overall) first, else the iRating
    *  provisional. Returns the number and whether it's provisional. */
-  const posOf = (c: CarEntry): { pos: number | null; provisional: boolean } => {
-    const real = c.classPosition ?? c.position;
-    if (real != null) return { pos: real, provisional: false };
-    const prov = provClassPos.get(c.carIdx) ?? provPos.get(c.carIdx) ?? null;
-    return { pos: prov, provisional: prov != null };
-  };
+  const posOf = (c: CarEntry) => relativePosOf(c, provPos, provClassPos);
 
   // Surface the player's provisional position in the header/footer info chips too,
   // so "Pos"/"Class" show the iRating-seeded number pre-qualify instead of nothing.
@@ -444,6 +428,9 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
 
   const headerChips = visibleChips(config.header, slowForChips, curSession, units);
   const footerChips = visibleChips(config.footer, slowForChips, curSession, units);
+  const fieldScale = config.fieldScale > 0 ? config.fieldScale : 1;
+  const rowScale = config.rowScale > 0 ? config.rowScale : 1;
+  const rowH = ROWH * rowScale;
 
   // Size-aware fit: measure the rows region (which flex-fills the space left by
   // the header/footer bars) and only ever show whole rows, so the bottom row is
@@ -455,14 +442,14 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
     if (!el) return;
     const measure = () => {
       const fontPx = parseFloat(getComputedStyle(el).fontSize) || 13;
-      const f = Math.max(1, Math.floor((el.clientHeight - 2) / (ROWH * fontPx)));
+      const f = Math.max(1, Math.floor((el.clientHeight - 2) / (rowH * fontPx)));
       setFit((p) => (p === f ? p : f));
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [rowH]);
 
   // Sort by relative gap (ahead → behind), keeping only cars with a known gap.
   // Drop cars that aren't in the world (`inWorld === false`): during practice the
@@ -507,7 +494,9 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
   // render) so this only fires when membership/order actually changes.
   const [rows, setRows] = useState<RelativeRowState[]>([]);
   const visSig = useMemo(() => visible.map((c) => c.carIdx).join(","), [visible]);
-  useEffect(() => {
+  // useLayoutEffect so slot assignments land before paint — useEffect left rows
+  // one frame behind fresh gap data, which reads as cars ahead showing below you.
+  useLayoutEffect(() => {
     const visibleIdx = new Map(visible.map((c, slot) => [c.carIdx, slot]));
     setRows((prev) => deriveRelativeRows(prev, visibleIdx, fit));
     // `visible` is intentionally omitted — `visSig` already encodes everything
@@ -522,7 +511,9 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
   // Latest known data per car, so an exiting row (no longer in `visible`) keeps
   // rendering its last known state through the fade instead of going blank.
   const carDataRef = useRef<Map<number, CarEntry>>(new Map());
-  visible.forEach((c) => carDataRef.current.set(c.carIdx, c));
+  // Keep the full ordered field fresh, not just the trimmed window — exiting rows
+  // and mid-swap slides should never show stale gaps from an old slice.
+  ordered.forEach((c) => carDataRef.current.set(c.carIdx, c));
 
   // Gain/loss flash: a flash means the user actually *witnessed* a swap, so it
   // only fires for a pairwise inversion between two cars that are BOTH visible
@@ -615,7 +606,7 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
 
       {headerChips.length > 0 && (
         <div style={{ paddingBottom: 5, marginBottom: 4, borderBottom: `1px solid ${hexToRgba("#ffffff", 0.12)}` }}>
-          <InfoBar chips={headerChips} color={t.text} dim={t.textDim} mono={mono} />
+          <InfoBar chips={headerChips} color={t.text} dim={t.textDim} mono={mono} scale={fieldScale} />
         </div>
       )}
 
@@ -630,7 +621,7 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
         {rows.length === 0 ? (
           <div style={{ textAlign: "center", color: t.textDim, fontSize: "0.82em" }}>No field data</div>
         ) : (
-          <div style={{ position: "relative", height: `${Math.max(visible.length, rows.length) * ROWH}em` }}>
+          <div style={{ position: "relative", height: `${Math.max(visible.length, rows.length) * rowH}em` }}>
             {rows.map((r) => {
               const car = carDataRef.current.get(r.carIdx);
               if (!car) return null;
@@ -645,6 +636,7 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
                   key={r.carIdx}
                   car={car}
                   slot={r.slot}
+                  rowH={rowH}
                   exiting={r.exiting}
                   isPlayer={isPlayer}
                   pos={pos}
@@ -668,7 +660,7 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
 
       {footerChips.length > 0 && (
         <div style={{ paddingTop: 5, marginTop: 4, borderTop: `1px solid ${hexToRgba("#ffffff", 0.12)}` }}>
-          <InfoBar chips={footerChips} color={t.text} dim={t.textDim} mono={mono} />
+          <InfoBar chips={footerChips} color={t.text} dim={t.textDim} mono={mono} scale={fieldScale} />
         </div>
       )}
     </div>
@@ -709,6 +701,8 @@ export const relativeDef: WidgetDefinition<RelativeConfig> = {
     { key: "rowsAhead", label: "Rows ahead", type: "number", min: 1, max: 8, step: 1 },
     { key: "rowsBehind", label: "Rows behind", type: "number", min: 1, max: 8, step: 1 },
     { key: "windowSeconds", label: "Window (s)", type: "number", min: 5, max: 60, step: 5 },
+    { key: "fieldScale", label: "Field scale", type: "number", min: 0.6, max: 2, step: 0.05 },
+    { key: "rowScale", label: "Row scale", type: "number", min: 0.6, max: 2, step: 0.05 },
     { key: "showFlag", label: "Flags", type: "boolean" },
     { key: "showLicense", label: "License", type: "boolean" },
     { key: "showIrating", label: "iRating", type: "boolean" },

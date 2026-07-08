@@ -5,7 +5,7 @@
 // Columns are built dynamically and a column is dropped entirely when no car can
 // fill it, so a sim that doesn't expose (say) tyre or flag data degrades cleanly.
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSlow, useCaps } from "../store/hooks";
 import { fmtGap, fmtLapTime, hexToRgba } from "./format";
 import { flagOf, parseLicense, classColorMap, classColorOf } from "./raceColors";
@@ -14,6 +14,7 @@ import { TyreBadge } from "./TyreBadge";
 import { PitBadge } from "./PitBadge";
 import { CarIcon, carIconFor, iracingIcon } from "./carIcons";
 import type { CarEntry } from "../store/types";
+import { buildProvisionalPositions, standingPosOf, standingSortKey } from "./provisionalPos";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 import type { Theme } from "../theme/theme";
 
@@ -239,7 +240,13 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
   const t = theme.colors;
   const mono = theme.font.mono;
 
-  let cars = [...(slow?.cars ?? [])].filter((c) => c.inWorld !== false).sort((a, b) => (a.position ?? 999) - (b.position ?? 999));
+  // Full session roster — everyone in standings, including drivers in other
+  // practice entities or still in the garage. Relative filters `inWorld` so only
+  // cars actually loaded near you show as neighbours; standings is always global.
+  const field = slow?.cars ?? [];
+  const { provPos, provClassPos } = useMemo(() => buildProvisionalPositions(field), [field]);
+  const sortKey = (c: CarEntry) => standingSortKey(c, config.multiclass, provPos, provClassPos);
+  let cars = [...field].sort((a, b) => sortKey(a) - sortKey(b));
   const playerClass = cars.find((c) => c.isPlayer || c.carIdx === playerIdx)?.carClassId ?? null;
   if (config.myClassOnly && playerClass != null) cars = cars.filter((c) => c.carClassId === playerClass);
 
@@ -299,7 +306,6 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
   const has = {
     delta: cars.some((c) => c.positionsGained != null),
     car: config.showCarIcon && cars.some((c) => carIconFor(c.carScreenName)),
-    num: cars.some((c) => c.carNumber),
     flag: config.showFlag && cars.some((c) => c.country),
     lic: config.showLicense && cars.some((c) => c.safetyRating),
     ir: config.showIrating && (capsLive?.irating ?? false) && cars.some((c) => c.irating != null),
@@ -314,11 +320,12 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
   const cols: Col[] = [];
   cols.push({
     id: "pos", w: "2.1em", head: "P", align: "l",
-    cell: (x) =>
-      x.pos == null ? (
-        <span style={{ color: t.textDim2 }}>--</span>
-      ) : (
+    cell: (x) => {
+      const { pos, provisional } = standingPosOf(x.car, config.multiclass, provPos, provClassPos);
+      if (pos == null) return <span style={{ color: t.textDim2 }}>--</span>;
+      return (
         <span
+          title={provisional ? "Provisional — grid order seeded by iRating (no session position set yet)" : undefined}
           style={{
             display: "inline-flex",
             alignItems: "center",
@@ -327,15 +334,18 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
             height: "1.55em",
             padding: "0 0.25em",
             borderRadius: 5,
-            background: "rgba(0,0,0,0.28)",
+            background: provisional ? "transparent" : "rgba(0,0,0,0.28)",
+            boxShadow: provisional ? `inset 0 0 0 1px ${hexToRgba("#ffffff", 0.22)}` : "none",
             fontVariantNumeric: "tabular-nums",
+            fontStyle: provisional ? "italic" : "normal",
             fontWeight: x.isPlayer ? 800 : 700,
-            color: x.isPlayer ? "#fff" : t.text,
+            color: x.isPlayer ? "#fff" : provisional ? t.textDim : t.text,
           }}
         >
-          {x.pos}
+          {pos}
         </span>
-      ),
+      );
+    },
   });
   if (has.delta)
     cols.push({
@@ -362,7 +372,13 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
         );
       },
     });
-  if (has.num) cols.push({ id: "num", w: "2.3em", head: "#", align: "r", cell: (x) => (x.car.carNumber ? numCell("#" + x.car.carNumber, t.textDim) : numCell("--", t.textDim2)) });
+  cols.push({
+    id: "num",
+    w: "2.3em",
+    head: "#",
+    align: "r",
+    cell: (x) => (x.car.carNumber ? numCell("#" + x.car.carNumber, t.textDim) : numCell("--", t.textDim2)),
+  });
   if (has.flag)
     cols.push({
       id: "flag", w: "1.4em", head: "", align: "c",
@@ -446,9 +462,11 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
   };
   cars.forEach(pushCar);
 
-  // Label each class: short name if the sim gives one, else the car model, else
-  // an ordinal — so multiclass always shows a meaningful header.
+  // Label each class and re-sort rows within the group by effective position
+  // (class-first in multiclass mode) — the initial field sort is overall and
+  // can mis-order cars inside a class when live class positions are still null.
   groups.forEach((g, i) => {
+    g.rows.sort((a, b) => sortKey(a.car) - sortKey(b.car));
     const named = g.rows.map((r) => r.car.carClassName).find((n) => n && n.trim());
     const model = g.rows.map((r) => r.car.carScreenName).find((m) => m && m.trim());
     g.name = config.multiclass ? named?.trim() || model?.trim() || `Class ${i + 1}` : null;
@@ -467,7 +485,7 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
       // Interval to the row above — only when both rows have real gap data.
       r.interval = i === 0 || r.gapToLeader == null || prev == null ? null : r.gapToLeader - prev;
       r.isFirst = i === 0;
-      r.pos = config.multiclass ? r.car.classPosition ?? r.car.position : r.car.position;
+      r.pos = standingPosOf(r.car, config.multiclass, provPos, provClassPos).pos;
       prev = r.gapToLeader;
     });
   }
@@ -544,7 +562,7 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
   // slow-path rates, and it's the resulting primitive value (not how it was
   // computed) that gates the effect below.
   const groupsSig = groups.map((g, i) => `${g.id ?? "all"}:${g.display.map((r) => r.car.carIdx).join(",")}:${counts[i]}`).join("|");
-  useEffect(() => {
+  useLayoutEffect(() => {
     setRowsByGroup((prev) => {
       const next = new Map<string, StandingsRowState[]>();
       for (let i = 0; i < groups.length; i++) {

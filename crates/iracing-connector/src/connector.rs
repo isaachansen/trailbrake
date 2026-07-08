@@ -535,6 +535,29 @@ fn wrap_gap(delta: f32, lap_len_s: Option<f32>) -> f32 {
     }
 }
 
+/// Signed track-time gap to the player: positive = this car is ahead.
+///
+/// Same-lap neighbours use [`wrap_gap`] on the `CarIdxEstTime` delta so order
+/// stays correct across the start/finish line. When `CarIdxLap` differs, the
+/// lap delta is applied first — folding a raw EstTime delta would treat a car a
+/// lap ahead as nearly behind (or vice versa), which is what makes the relative
+/// board drift from reality during races.
+fn relative_gap(
+    car_est: f32,
+    player_est: f32,
+    car_lap: i32,
+    player_lap: i32,
+    lap_len_s: Option<f32>,
+) -> f32 {
+    let lap_len = lap_len_s.filter(|&l| l.is_finite() && l > 1.0);
+    let lap_delta = car_lap - player_lap;
+    match lap_len {
+        Some(l) if lap_delta != 0 => lap_delta as f32 * l + (car_est - player_est),
+        Some(l) => wrap_gap(car_est - player_est, Some(l)),
+        None => car_est - player_est,
+    }
+}
+
 impl SimConnector for IRacingConnector {
     fn sim_id(&self) -> SimId {
         SimId::IRacing
@@ -849,10 +872,9 @@ impl SimConnector for IRacingConnector {
         // Build the field from DriverInfo (parsed on session change) + the live
         // CarIdx* arrays. Gap is approximated from CarIdxEstTime (time at each
         // car's track position) relative to the player.
-        let player_est = self
-            .session_min
-            .driver_car_idx
-            .and_then(|pi| f32_at(vm, buf, "CarIdxEstTime", pi as usize));
+        let player_idx = self.session_min.driver_car_idx.map(|pi| pi as usize);
+        let player_est = player_idx.and_then(|pi| f32_at(vm, buf, "CarIdxEstTime", pi));
+        let player_lap = player_idx.and_then(|pi| i32_at(vm, buf, "CarIdxLap", pi));
         // Lap length (s) for wrapping relative gaps across start/finish: prefer
         // the YAML estimate, fall back to the player's best / last lap.
         let lap_len_s = self
@@ -869,8 +891,16 @@ impl SimConnector for IRacingConnector {
             .map(|d| {
                 let i = d.car_idx as usize;
                 let est = f32_at(vm, buf, "CarIdxEstTime", i);
-                let gap = match (est, player_est) {
-                    (Some(e), Some(p)) => Some(wrap_gap(e - p, lap_len_s)),
+                let car_lap = i32_at(vm, buf, "CarIdxLap", i);
+                let yaml_pos = session_num
+                    .and_then(|sn| self.session_min.session_position(sn, d.car_idx));
+                let gap = match (est, player_est, car_lap, player_lap) {
+                    (Some(e), Some(p), Some(cl), Some(pl)) => {
+                        Some(relative_gap(e, p, cl, pl, lap_len_s))
+                    }
+                    (Some(e), Some(p), _, _) => lap_len_s
+                        .map(|l| wrap_gap(e - p, Some(l)))
+                        .or(Some(e - p)),
                     _ => None,
                 };
                 overlay_core::CarState {
@@ -885,8 +915,10 @@ impl SimConnector for IRacingConnector {
                     positions_gained: None, // TODO: derive from start position
                     irating_delta: None,    // not exposed live
                     tyre: None,             // iRacing doesn't expose compound letter per car
-                    position: position(u32_at(vm, buf, "CarIdxPosition", i)),
-                    class_position: position(u32_at(vm, buf, "CarIdxClassPosition", i)),
+                    position: position(u32_at(vm, buf, "CarIdxPosition", i))
+                        .or(yaml_pos.map(|(p, _)| p)),
+                    class_position: position(u32_at(vm, buf, "CarIdxClassPosition", i))
+                        .or(yaml_pos.map(|(_, cp)| cp)),
                     lap: i32_at(vm, buf, "CarIdxLap", i),
                     lap_dist_pct: f32_at(vm, buf, "CarIdxLapDistPct", i),
                     gap_to_player_s: gap,
@@ -1005,6 +1037,29 @@ mod tests {
     fn wrap_gap_no_lap_len_is_identity() {
         assert!((wrap_gap(88.0, None) - 88.0).abs() < 1e-4);
         assert!((wrap_gap(50.0, Some(0.0)) - 50.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn relative_gap_same_lap_wraps_at_start_finish() {
+        // Player just crossed S/F (~0); car behind still near lap end (~88s).
+        let g = relative_gap(88.0, 0.0, 5, 5, Some(90.0));
+        assert!((g + 2.0).abs() < 1e-3, "expected ~-2s behind, got {g}");
+    }
+
+    #[test]
+    fn relative_gap_lap_ahead_not_folded_as_behind() {
+        // One lap ahead at 10s vs player deep on prior lap — must read ahead, not
+        // folded to nearly behind by wrap_gap alone.
+        let g = relative_gap(10.0, 80.0, 6, 5, Some(90.0));
+        assert!(g > 0.0, "expected ahead, got {g}");
+        assert!((g - 20.0).abs() < 1e-3, "expected ~+20s, got {g}");
+    }
+
+    #[test]
+    fn relative_gap_lap_behind() {
+        let g = relative_gap(80.0, 10.0, 5, 6, Some(90.0));
+        assert!(g < 0.0, "expected behind, got {g}");
+        assert!((g + 20.0).abs() < 1e-3, "expected ~-20s, got {g}");
     }
 
     // 3-sector track: boundaries at 0.0, 0.3, 0.6.

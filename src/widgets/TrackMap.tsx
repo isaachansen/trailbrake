@@ -27,12 +27,11 @@ import type { SlowSample } from "../store/types";
 export interface TrackMapConfig {
   showField: boolean;
   classColors: boolean;
-  showTurns: boolean;
   /** In qualifying, show only the player dot (solo hot lap — no field). */
   soloInQualy: boolean;
 }
 
-const defaultConfig: TrackMapConfig = { showField: true, classColors: false, showTurns: true, soloInQualy: true };
+const defaultConfig: TrackMapConfig = { showField: true, classColors: false, soloInQualy: true };
 
 /** A centerline whose point index i maps to lap-distance fraction i/N. */
 interface PathGeom {
@@ -175,31 +174,6 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
       ctx.fillStyle = "#fff";
       ctx.fillRect(MX(sf) - 1.5, MY(sf) - 5, 3, 10);
 
-      // Corner labels (positioned just off the track in the same 0..1 space).
-      // Skipped entirely below ~240px wide (too little room for legible digits)
-      // and, per-label, whenever its projected position lands within ~12px of
-      // an already-drawn label (tight chicanes otherwise merge into "87").
-      if (config.showTurns && w >= 240) {
-        const turns = slow?.trackTurns ?? null;
-        if (turns) {
-          ctx.font = "600 9px system-ui, sans-serif";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          const drawn: [number, number][] = [];
-          for (const tn of turns) {
-            const x = MX([tn.x, tn.y]);
-            const y = MY([tn.x, tn.y]);
-            if (drawn.some(([dx, dy]) => Math.hypot(x - dx, y - dy) < 12)) continue;
-            drawn.push([x, y]);
-            ctx.lineWidth = 3;
-            ctx.strokeStyle = "rgba(0,0,0,0.55)";
-            ctx.strokeText(tn.label, x, y);
-            ctx.fillStyle = "rgba(231,235,242,0.72)";
-            ctx.fillText(tn.label, x, y);
-          }
-        }
-      }
-
       const dot = (
         p: [number, number],
         rad: number,
@@ -306,7 +280,6 @@ export const trackMapDef: WidgetDefinition<TrackMapConfig> = {
   configSchema: [
     { key: "showField", label: "Show field", type: "boolean" },
     { key: "classColors", label: "Class colors", type: "boolean" },
-    { key: "showTurns", label: "Corner numbers", type: "boolean" },
     { key: "soloInQualy", label: "Solo in qualy", type: "boolean" },
   ],
   Component: TrackMap,
