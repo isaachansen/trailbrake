@@ -187,6 +187,8 @@ struct CarMsg {
     tyre: Option<String>,
     position: Option<u32>,
     class_position: Option<u32>,
+    #[serde(default)]
+    position_provisional: bool,
     lap: Option<i32>,
     lap_dist_pct: Option<f32>,
     gap_to_player_s: Option<f32>,
@@ -206,6 +208,8 @@ struct CarMsg {
     pit_status: Option<u32>,
     /// True when this car holds the session fastest lap.
     has_session_fastest: Option<bool>,
+    rolling_lap_avg_s: Option<f32>,
+    lap_delta_vs_avg_s: Option<f32>,
     is_player: bool,
 }
 
@@ -214,6 +218,7 @@ struct CarMsg {
 struct SlowSample {
     sim: String,
     track_name: Option<String>,
+    track_length_m: Option<f32>,
     session_type: Option<String>,
     time_remaining_s: Option<f64>,
     laps_remaining: Option<i32>,
@@ -233,6 +238,7 @@ struct SlowSample {
     spectated_car_idx: Option<u32>,
     car_name: Option<String>,
     on_track: Option<bool>,
+    off_track: Option<bool>,
     in_garage: Option<bool>,
     car_left: Option<bool>,
     car_right: Option<bool>,
@@ -257,6 +263,14 @@ struct SlowSample {
     // Sector times.
     sector_times_s: SectorsMsg,
     sector_best_s: SectorsMsg,
+    sector_prev_times_s: SectorsMsg,
+    sector_session_best_s: SectorsMsg,
+    sector_session_best_prev_s: SectorsMsg,
+    current_sector_idx: Option<u32>,
+    sector_elapsed_s: Option<f32>,
+    sector_progress: Option<f32>,
+    sector_live_delta_s: Option<f32>,
+    sector_ghost_best_s: SectorsMsg,
     // In-car setup.
     brake_bias_pct: Option<f32>,
     abs_active: Option<bool>,
@@ -266,6 +280,12 @@ struct SlowSample {
     fuel_mix: Option<i32>,
     p2p_available: Option<i32>,
     tire_pressures: TirePressuresMsg,
+    incidents: Option<u32>,
+    incident_limit: Option<u32>,
+    // iRacing shift-light SDK fields (session YAML, DriverInfo).
+    driver_car_redline: Option<f32>,
+    driver_car_sl_shift_rpm: Option<f32>,
+    driver_car_sl_blink_rpm: Option<f32>,
 }
 
 #[derive(Clone, Serialize)]
@@ -370,6 +390,7 @@ fn slow_from(snap: &TelemetrySnapshot) -> SlowSample {
             tyre: c.tyre.clone(),
             position: c.position,
             class_position: c.class_position,
+            position_provisional: c.position_provisional,
             lap: c.lap,
             lap_dist_pct: c.lap_dist_pct,
             gap_to_player_s: c.gap_to_player_s,
@@ -383,12 +404,15 @@ fn slow_from(snap: &TelemetrySnapshot) -> SlowSample {
             rel_lon_m: c.rel_lon_m,
             pit_status: c.pit_status,
             has_session_fastest: c.has_session_fastest,
+            rolling_lap_avg_s: c.rolling_lap_avg_s,
+            lap_delta_vs_avg_s: c.lap_delta_vs_avg_s,
             is_player: player_idx == Some(c.car_idx),
         })
         .collect();
     SlowSample {
         sim: format!("{:?}", snap.meta.sim).to_lowercase(),
         track_name: s.track_name.clone(),
+        track_length_m: s.track_length_m,
         session_type: s.session_type.clone(),
         time_remaining_s: s.time_remaining_s,
         laps_remaining: s.laps_remaining,
@@ -408,6 +432,7 @@ fn slow_from(snap: &TelemetrySnapshot) -> SlowSample {
         spectated_car_idx: s.spectated_car_idx,
         car_name: p.car_name.clone(),
         on_track: p.on_track,
+        off_track: p.off_track,
         in_garage: p.in_garage,
         car_left: p.car_left,
         car_right: p.car_right,
@@ -455,6 +480,30 @@ fn slow_from(snap: &TelemetrySnapshot) -> SlowSample {
             s2: p.sector_best_s.s2,
             s3: p.sector_best_s.s3,
         },
+        sector_prev_times_s: SectorsMsg {
+            s1: p.sector_prev_times_s.s1,
+            s2: p.sector_prev_times_s.s2,
+            s3: p.sector_prev_times_s.s3,
+        },
+        sector_session_best_s: SectorsMsg {
+            s1: p.sector_session_best_s.s1,
+            s2: p.sector_session_best_s.s2,
+            s3: p.sector_session_best_s.s3,
+        },
+        sector_session_best_prev_s: SectorsMsg {
+            s1: p.sector_session_best_prev_s.s1,
+            s2: p.sector_session_best_prev_s.s2,
+            s3: p.sector_session_best_prev_s.s3,
+        },
+        current_sector_idx: p.current_sector_idx,
+        sector_elapsed_s: p.sector_elapsed_s,
+        sector_progress: p.sector_progress,
+        sector_live_delta_s: p.sector_live_delta_s,
+        sector_ghost_best_s: SectorsMsg {
+            s1: p.sector_ghost_best_s.s1,
+            s2: p.sector_ghost_best_s.s2,
+            s3: p.sector_ghost_best_s.s3,
+        },
         brake_bias_pct: p.brake_bias_pct,
         abs_active: p.abs_active,
         tc_active: p.tc_active,
@@ -468,6 +517,11 @@ fn slow_from(snap: &TelemetrySnapshot) -> SlowSample {
             lr_kpa: p.tire_pressures.lr_kpa,
             rr_kpa: p.tire_pressures.rr_kpa,
         },
+        incidents: p.incidents,
+        incident_limit: p.incident_limit,
+        driver_car_redline: p.driver_car_redline,
+        driver_car_sl_shift_rpm: p.driver_car_sl_shift_rpm,
+        driver_car_sl_blink_rpm: p.driver_car_sl_blink_rpm,
     }
 }
 

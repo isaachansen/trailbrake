@@ -70,6 +70,8 @@ function Chat({ theme, config }: BaseWidgetProps<ChatConfig>) {
 export const chatDef: WidgetDefinition<ChatConfig> = {
   id: "chat",
   name: "Chat",
+  /** Hidden from add-widget catalogs until a real chat source is wired. */
+  draft: true,
   defaultSize: { w: 344, h: 180 },
   minSize: { w: 220, h: 120 },
   defaultConfig,

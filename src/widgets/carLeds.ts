@@ -1,11 +1,11 @@
-// Per-car rev-light / shift-light profiles for the Dash Cluster, baked from the
-// community "Lovely Car Data" dataset (CC BY-NC-SA 4.0 — see `_license` in the
-// JSON). Regenerate with `npm run fetch-lovely-data`.
+// Per-car rev-light / shift-light profiles for Dash Cluster + Tachometer, baked
+// from the community "Lovely Car Data" dataset (CC BY-NC-SA 4.0 — see `_license`
+// in the JSON). Regenerate with `npm run fetch-lovely-car-data`.
 //
-// At runtime the Dash widget knows the live car only by its display name
-// (`slow.carName`, e.g. iRacing's `CarScreenName`), while the dataset is keyed by
-// its own `carName` / `carId`. `resolveCarLeds()` matches the two: exact
-// normalized name, then carId, then an overrides alias, then a fuzzy token match.
+// At runtime widgets know the live car only by its display name (`slow.carName`,
+// e.g. iRacing's `CarScreenName`), while the dataset is keyed by its own
+// `carName` / `carId`. `resolveCarLeds()` matches the two: exact normalized
+// name, then carId, then an overrides alias, then a fuzzy token match.
 // Unmatched → null, and the widget falls back to its flat `redlineRpm` config.
 
 import data from "./data/carLeds.json";

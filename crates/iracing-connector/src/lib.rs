@@ -11,7 +11,11 @@
 #![cfg(windows)]
 
 mod connector;
+mod flair;
 mod irsdk;
+mod lap_history;
+mod positions;
+mod reference_lap;
 mod session;
 mod track_map;
 

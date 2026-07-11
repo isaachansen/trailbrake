@@ -34,7 +34,9 @@ function parseArgs(argv) {
   const a = { widgets: [], bg: "track", size: "default", scale: "1", opacity: "1",
     out: "widget-shots", port: "5179", server: true, sheet: true, scaleFactor: "2", config: "" };
   for (const arg of argv) {
-    const [k, v = ""] = arg.replace(/^--/, "").split("=");
+    const eq = arg.indexOf("=");
+    const k = (eq === -1 ? arg : arg.slice(0, eq)).replace(/^--/, "");
+    const v = eq === -1 ? "" : arg.slice(eq + 1);
     if (k === "widget") a.widgets.push(v);
     else if (k === "no-server") a.server = false;
     else if (k === "no-sheet") a.sheet = false;

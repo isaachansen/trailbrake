@@ -18,7 +18,7 @@ const META: Record<string, WidgetMeta> = {
   },
   tachometer: {
     monogram: "TAC",
-    description: "Gear and RPM bar with shift-point and redline markers.",
+    description: "Per-car shift-light strip (Lovely RPM thresholds), same LEDs as the Dash.",
   },
   "delta-bar": {
     monogram: "Δ",
@@ -66,11 +66,11 @@ const META: Record<string, WidgetMeta> = {
   },
   traffic: {
     monogram: "TRF",
-    description: "Nearest faster/slower car, its class, gap and whether it's closing.",
+    description: "Other-class cars catching you, or anyone lapping — gap and closing.",
   },
   "slow-car-ahead": {
     monogram: "SCA",
-    description: "Warns when a much slower car is just ahead on track.",
+    description: "Warns when a stopped/crawling car is ahead and you're closing on it.",
   },
   "track-map": {
     monogram: "MAP",
@@ -90,7 +90,7 @@ const META: Record<string, WidgetMeta> = {
   },
   "rejoin-indicator": {
     monogram: "RJN",
-    description: "Tells you when it's safe to rejoin after going off track.",
+    description: "When you're off track: gap behind and whether it's safe to rejoin.",
   },
   "setup-comparison": {
     monogram: "SET",

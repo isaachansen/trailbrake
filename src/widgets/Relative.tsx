@@ -16,7 +16,8 @@ import { useSlow } from "../store/hooks";
 import { useSettings } from "../store/appSettings";
 import { fmtGap, fmtLapTime, fmtDelta, hexToRgba, fuelValue, fuelLabel, tempValue, tempLabel, type UnitSystem } from "./format";
 import { InfoIcon } from "./relativeInfoIcons";
-import { flagOf, parseLicense, classColorMap, classColorOf } from "./raceColors";
+import { parseLicense, classColorMap, classColorOf } from "./raceColors";
+import { FlagSwatch } from "./FlagSwatch";
 import { LicenseBadge } from "./LicenseBadge";
 import { TyreBadge } from "./TyreBadge";
 import { PitBadge } from "./PitBadge";
@@ -102,6 +103,15 @@ const INFO_FIELDS: InfoFieldDef[] = [
   { key: "airTemp", label: "Air temp", render: (s, u) => { const v = tempValue(s?.airTempC ?? null, u); return v != null ? `${Math.round(v)}${tempLabel(u)}` : null; } },
   { key: "trackTemp", label: "Track temp", render: (s, u) => { const v = tempValue(s?.trackTempC ?? null, u); return v != null ? `${Math.round(v)}${tempLabel(u)}` : null; } },
   { key: "brakeBias", label: "Brake bias", render: (s) => (s?.brakeBiasPct != null ? `${(s.brakeBiasPct * 100).toFixed(1)}%` : null) },
+  {
+    key: "incidents",
+    label: "Incidents",
+    render: (s) => {
+      if (s?.incidents == null) return null;
+      const limit = s.incidentLimit != null ? String(s.incidentLimit) : "∞";
+      return `${s.incidents}/${limit}`;
+    },
+  },
 ];
 
 /** Catalog exposed to the settings panel (key + label, in default order). */
@@ -126,7 +136,7 @@ const defaultConfig: RelativeConfig = {
   showTyre: true,
   showCarIcon: true,
   soloInQualy: true,
-  header: buildFieldDefaults(["sessionType", "position", "timeLeft"]),
+  header: buildFieldDefaults(["sessionType", "position", "timeLeft", "incidents"]),
   footer: buildFieldDefaults(["last", "best", "fuel"]),
 };
 
@@ -269,7 +279,7 @@ interface RelativeRowProps {
   t: Theme["colors"];
   mono: string;
   ccol: Map<number, string>;
-  has: { flag: boolean; car: boolean; lic: boolean; ir: boolean; tyre: boolean };
+  has: { flag: boolean; car: boolean; lic: boolean; ir: boolean; tyre: boolean; lapTrend: boolean };
   cols: string;
   highlight: HighlightEvent | null;
   onExited: (carIdx: number) => void;
@@ -326,7 +336,7 @@ function RelativeRow({ car, slot, rowH, exiting, isPlayer, pos, provisional, gap
         <span style={{ color: t.textDim2 }}>--</span>
       ) : (
         <span
-          title={provisional ? "Provisional — grid order seeded by iRating (no session position set yet)" : undefined}
+          title={provisional ? "Provisional — grid, qualify, or car-number order (no live session position yet)" : undefined}
           style={{
             display: "inline-flex",
             alignItems: "center",
@@ -335,12 +345,11 @@ function RelativeRow({ car, slot, rowH, exiting, isPlayer, pos, provisional, gap
             height: "1.55em",
             padding: "0 0.25em",
             borderRadius: 5,
-            // Real position → solid chip; provisional → outlined + italic so it
+            // Real position → solid chip; provisional → outlined + dim so it
             // reads as a seeded estimate, not a live result.
             background: provisional ? "transparent" : "rgba(0,0,0,0.28)",
             boxShadow: provisional ? `inset 0 0 0 1px ${hexToRgba("#ffffff", 0.22)}` : "none",
             fontVariantNumeric: "tabular-nums",
-            fontStyle: provisional ? "italic" : "normal",
             fontWeight: isPlayer ? 800 : 700,
             color: isPlayer ? "#fff" : provisional ? t.textDim : t.text,
           }}
@@ -349,7 +358,9 @@ function RelativeRow({ car, slot, rowH, exiting, isPlayer, pos, provisional, gap
         </span>
       )}
       {has.flag && (
-        <span style={{ justifySelf: "center", display: "inline-block", width: "1.2em", height: "0.82em", borderRadius: 2, background: flagOf(car.country), boxShadow: "inset 0 0 0 1px rgba(0,0,0,.35)" }} />
+        <span style={{ justifySelf: "center" }}>
+          <FlagSwatch country={car.country} />
+        </span>
       )}
       {has.car && (
         <span style={{ justifySelf: "center", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -359,8 +370,8 @@ function RelativeRow({ car, slot, rowH, exiting, isPlayer, pos, provisional, gap
           })()}
         </span>
       )}
-      <span style={{ display: "flex", alignItems: "center", gap: "0.45em", overflow: "hidden", marginLeft: has.car ? "0.65em" : undefined }}>
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: isPlayer ? "#fff" : t.text }}>
+      <span style={{ display: "flex", alignItems: "center", alignSelf: "stretch", gap: "0.45em", overflow: "hidden", minWidth: 0, marginLeft: has.car ? "0.65em" : undefined, lineHeight: 1 }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, lineHeight: 1, color: isPlayer ? "#fff" : t.text }}>
           {car.driverName ?? `Car ${car.carIdx}`}
         </span>
         {inPit && <PitBadge color={t.amber} />}
@@ -383,6 +394,11 @@ function RelativeRow({ car, slot, rowH, exiting, isPlayer, pos, provisional, gap
       <span style={{ fontFamily: mono, fontWeight: 700, fontVariantNumeric: "tabular-nums", textAlign: "right", color: isPlayer ? "#fff" : gap > 0 ? t.loss : t.gain }}>
         {isPlayer ? "—" : `${gap > 0 ? "+" : "−"}${fmtGap(gap)}`}
       </span>
+      {has.lapTrend && (
+        <span style={{ fontFamily: mono, fontVariantNumeric: "tabular-nums", textAlign: "right", fontSize: "0.88em", color: car.lapDeltaVsAvgS == null ? t.textDim2 : (car.lapDeltaVsAvgS < -0.05 ? t.gain : car.lapDeltaVsAvgS > 0.05 ? t.loss : t.textDim) }}>
+          {car.lapDeltaVsAvgS != null ? fmtDelta(car.lapDeltaVsAvgS) : "—"}
+        </span>
+      )}
     </div>
   );
 }
@@ -584,6 +600,7 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
     lic: config.showLicense && visible.some((c) => c.safetyRating),
     ir: config.showIrating && visible.some((c) => c.irating != null),
     tyre: config.showTyre && visible.some((c) => c.tyre),
+    lapTrend: visible.some((c) => c.lapDeltaVsAvgS != null),
   };
 
   // Grid columns mirror the data we actually have.
@@ -595,7 +612,8 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
     (has.lic ? " 4.2em" : "") +
     (has.ir ? " 2.7em" : "") +
     (has.tyre ? " 2em" : "") +
-    " 3.1em"; // gap
+    " 3.1em" + // gap
+    (has.lapTrend ? " 2.4em" : ""); // lap form vs rolling avg
 
   return (
     <div style={{ width: "100%", height: "100%", overflow: "hidden", display: "flex", flexDirection: "column", color: t.text, padding: theme.widgetPad, boxSizing: "border-box" }}>

@@ -15,11 +15,16 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 interface Props {
   /** Renders the widget at the given (virtual, pre-scale) size. */
   children: (size: { w: number; h: number }) => ReactNode;
+  /** Fired when the widget's natural (pre-scale) content size is measured. */
+  onNaturalSize?: (size: { w: number; h: number }) => void;
 }
 
-export function FitContent({ children }: Props) {
+export function FitContent({ children, onNaturalSize }: Props) {
   const outerRef = useRef<HTMLDivElement | null>(null);
   const innerRef = useRef<HTMLDivElement | null>(null);
+  const onNaturalSizeRef = useRef(onNaturalSize);
+  onNaturalSizeRef.current = onNaturalSize;
+  const lastNaturalRef = useRef<{ w: number; h: number } | null>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
   const [scale, setScale] = useState(1);
   // Bumped whenever something that affects the fit changes (box size or the
@@ -38,6 +43,15 @@ export function FitContent({ children }: Props) {
     const inner = innerRef.current;
     if (!outer || !inner) return;
 
+    let raf = 0;
+    const bumpFit = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        setFitKey((k) => k + 1);
+      });
+    };
+
     const ro = new ResizeObserver(() => {
       const w = outer.clientWidth;
       const h = outer.clientHeight;
@@ -45,18 +59,24 @@ export function FitContent({ children }: Props) {
     });
     ro.observe(outer);
 
-    let raf = 0;
+    const childRo = new ResizeObserver(bumpFit);
+    const watchChildren = () => {
+      childRo.disconnect();
+      for (const child of Array.from(inner.children) as HTMLElement[]) {
+        childRo.observe(child);
+      }
+    };
+
     const mo = new MutationObserver(() => {
-      if (raf) return;
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        setFitKey((k) => k + 1);
-      });
+      bumpFit();
+      watchChildren();
     });
     mo.observe(inner, { childList: true, subtree: true });
+    watchChildren();
 
     return () => {
       ro.disconnect();
+      childRo.disconnect();
       mo.disconnect();
       if (raf) cancelAnimationFrame(raf);
     };
@@ -65,6 +85,7 @@ export function FitContent({ children }: Props) {
   // A fit pass starts from the natural size (scale 1) so the measurement below
   // sees the true content height. Runs on box change and on every content bump.
   useLayoutEffect(() => {
+    lastNaturalRef.current = null;
     setScale(1);
   }, [box.w, box.h, fitKey]);
 
@@ -84,10 +105,15 @@ export function FitContent({ children }: Props) {
       sh = Math.max(sh, child.scrollHeight);
     }
     if (sw === 0 || sh === 0) return;
+    const last = lastNaturalRef.current;
+    if (!last || last.w !== sw || last.h !== sh) {
+      lastNaturalRef.current = { w: sw, h: sh };
+      onNaturalSizeRef.current?.({ w: sw, h: sh });
+    }
     // 1px slack so sub-pixel rounding doesn't trigger a needless shrink.
     const s = Math.min(1, box.w / Math.max(sw - 1, 1), box.h / Math.max(sh - 1, 1));
     if (s < scale - 0.004) setScale(s);
-  });
+  }, [box.w, box.h, scale, fitKey]);
 
   // Render the widget into a virtual box that's larger by 1/scale, then scale the
   // whole thing down to the real box — so after scaling it fills the box exactly.

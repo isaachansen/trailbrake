@@ -1,6 +1,14 @@
-// Shared "PIT" badge — a compact amber pill shown on a Relative/Standings row
-// when the car is on pit road. Amber reads as "out of the racing flow" without
-// stealing the eye the way a red would. Sized in em so it scales with the row.
+// Shared "PIT" badge — a compact amber pill shown inline next to a driver name
+// on Relative/Standings when the car is on pit road. Amber reads as "out of the
+// racing flow" without stealing the eye the way a red would.
+//
+// Outer box sized in the row's em so the name cell can flex-center it; label
+// text nested smaller. Kept a hair under the license chip so it reads as a
+// name annotation.
+
+import { defaultTheme } from "../theme/theme";
+
+const LABEL = defaultTheme.font.label;
 
 export function PitBadge({ color }: { color: string }) {
   return (
@@ -9,22 +17,32 @@ export function PitBadge({ color }: { color: string }) {
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        height: "1.25em",
-        padding: "0 0.4em",
+        height: "1.35em",
+        padding: "0 0.45em",
+        boxSizing: "border-box",
         borderRadius: 4,
         background: color,
-        color: "#0a0b0e",
-        fontSize: "0.62em",
-        fontWeight: 800,
-        letterSpacing: "0.08em",
-        // letter-spacing adds a trailing gap after the final "T", which shoves the
-        // text left of the pill's center; indent by the same amount to re-center.
-        textIndent: "0.08em",
-        lineHeight: 1,
         flex: "none",
+        lineHeight: 1,
       }}
     >
-      PIT
+      <span
+        style={{
+          fontFamily: LABEL,
+          fontSize: "0.7em",
+          fontWeight: 800,
+          letterSpacing: "0.07em",
+          // letter-spacing adds a trailing gap after the final "T"; indent by the
+          // same amount so the word sits centered in the pill.
+          textIndent: "0.07em",
+          color: "#0a0b0e",
+          lineHeight: 1,
+          // Caps-only glyphs sit optically high in the em box; nudge down a hair.
+          transform: "translateY(0.06em)",
+        }}
+      >
+        PIT
+      </span>
     </span>
   );
 }

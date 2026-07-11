@@ -1,54 +1,84 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
 import { useSlow } from "../store/hooks";
+import type { TrackTurnMarker } from "../store/types";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
-/** A corner with a name and a lap-distance fraction (0..1). */
-interface CornerMarker {
+/** A track section with start/end lap fractions (Lovely) or a point marker fallback. */
+interface TrackSection {
   name: string;
-  marker: number;
+  start: number;
+  end: number;
+}
+
+function inSection(pct: number, start: number, end: number): boolean {
+  if (start <= end) return pct >= start && pct < end;
+  return pct >= start || pct < end;
+}
+
+function sectionProgress(pct: number, start: number, end: number): number {
+  let len = end - start;
+  if (len <= 0) len += 1;
+  let into = pct - start;
+  if (into < 0) into += 1;
+  return Math.max(0, Math.min(1, into / len));
 }
 
 /**
- * Build the sorted corner list for the current track, preferring real
- * lovely-track-data markers and otherwise deriving lap fractions from the
- * Track Map's `trackTurns` (x,y) against `trackPath`.
- *
- * On real iRacing tracks `trackMetadata` (and thus `lovelyTurns`) is null, but
- * `trackTurns` + `trackPath` ARE present. For each turn we find the nearest
- * point on `trackPath` to the turn's (x,y); that point's index / path.length is
- * the corner's lap fraction (the path is sampled start/finish-first in driving
- * order, so index ↔ lapDistPct).
+ * Build sections from Lovely turn ranges when available; otherwise derive
+ * marker-only segments from turn points on the baked centerline.
  */
-function buildCorners(
-  lovelyTurns: { name: string; marker: number }[] | null | undefined,
+function buildSections(
+  lovelyTurns: TrackTurnMarker[] | null | undefined,
   trackTurns: { label: string; x: number; y: number }[] | null,
   trackPath: [number, number][] | null,
-): CornerMarker[] {
+): TrackSection[] {
   if (lovelyTurns && lovelyTurns.length > 0) {
-    return [...lovelyTurns]
-      .map((tn) => ({ name: tn.name, marker: tn.marker }))
+    const ranged = lovelyTurns.filter(
+      (t) => t.start != null && t.end != null && Number.isFinite(t.start) && Number.isFinite(t.end),
+    );
+    if (ranged.length > 0) {
+      return ranged
+        .map((t) => ({ name: t.name, start: t.start!, end: t.end! }))
+        .sort((a, b) => a.start - b.start);
+    }
+    const markers = [...lovelyTurns]
+      .map((t) => ({ name: t.name, marker: t.marker }))
       .sort((a, b) => a.marker - b.marker);
+    return markers.map((m, i) => {
+      const next = markers[(i + 1) % markers.length]!.marker;
+      return { name: m.name, start: m.marker, end: next <= m.marker ? next + 1 : next };
+    });
   }
   if (trackTurns && trackTurns.length > 0 && trackPath && trackPath.length > 0) {
     const n = trackPath.length;
-    const derived: CornerMarker[] = trackTurns.map((tn) => {
-      let bestI = 0;
-      let bestD = Infinity;
-      for (let i = 0; i < n; i++) {
-        const dx = trackPath[i][0] - tn.x;
-        const dy = trackPath[i][1] - tn.y;
-        const d = dx * dx + dy * dy;
-        if (d < bestD) {
-          bestD = d;
-          bestI = i;
+    const markers = trackTurns
+      .map((tn) => {
+        let bestI = 0;
+        let bestD = Infinity;
+        for (let i = 0; i < n; i++) {
+          const dx = trackPath[i][0] - tn.x;
+          const dy = trackPath[i][1] - tn.y;
+          const d = dx * dx + dy * dy;
+          if (d < bestD) {
+            bestD = d;
+            bestI = i;
+          }
         }
-      }
-      return { name: tn.label, marker: bestI / n };
+        return { name: tn.label, marker: bestI / n };
+      })
+      .sort((a, b) => a.marker - b.marker);
+    return markers.map((m, i) => {
+      const next = markers[(i + 1) % markers.length]!.marker;
+      return { name: m.name, start: m.marker, end: next <= m.marker ? next + 1 : next };
     });
-    return derived.sort((a, b) => a.marker - b.marker);
   }
   return [];
+}
+
+function formatCornerName(raw: string): string {
+  const s = raw.trim();
+  return /^\d+[a-z]?$/i.test(s) ? `T${s}` : s;
 }
 
 export interface CornerNameConfig {
@@ -73,70 +103,49 @@ function CornerName({ theme, config }: BaseWidgetProps<CornerNameConfig>) {
   const live = useRef({ config });
   live.current = { config };
 
-  // Derive the sorted corner list, preferring real lovely markers and otherwise
-  // mapping `trackTurns` (x,y) to lap fractions via the nearest `trackPath`
-  // point. Memoized on geometry identity so the nearest-point search doesn't run
-  // every rAF frame (it only recomputes when the track/turn data changes).
   const lovelyTurns = slow?.trackMetadata?.lovelyTurns ?? null;
   const trackTurns = slow?.trackTurns ?? null;
   const trackPath = slow?.trackPath ?? null;
-  const corners = useMemo(
-    () => buildCorners(lovelyTurns, trackTurns, trackPath),
+  const sections = useMemo(
+    () => buildSections(lovelyTurns, trackTurns, trackPath),
     [lovelyTurns, trackTurns, trackPath],
   );
-  const cornersRef = useRef(corners);
-  cornersRef.current = corners;
+  const sectionsRef = useRef(sections);
+  sectionsRef.current = sections;
 
   useEffect(() => {
     let raf = 0;
     const draw = () => {
       const fast = store.latestFast;
-      // Sorted corners (markers are lap-distance fractions 0..1, directly
-      // comparable to lapDistPct).
-      const turns = cornersRef.current.length > 0 ? cornersRef.current : null;
+      const list = sectionsRef.current.length > 0 ? sectionsRef.current : null;
       const pct = fast?.lapDistPct ?? null;
 
       let label = "—";
       let sub = "";
       let progress = 0;
 
-      if (turns && turns.length > 0 && pct != null) {
-        // Find the last corner whose marker the driver has passed (the corner
-        // behind them right now). We walk the sorted list and find the largest
-        // marker <= pct, with wrap-around so a driver past the last corner
-        // (near lap end) wraps to the final corner.
-        let currentIdx = turns.length - 1; // default: last corner (lap wrap case)
-        for (let i = 0; i < turns.length; i++) {
-          if (turns[i].marker > pct) {
-            // First corner ahead — the one before it is the last-passed corner.
-            currentIdx = i === 0 ? turns.length - 1 : i - 1;
-            break;
+      if (list && list.length > 0 && pct != null) {
+        const current = list.find((s) => inSection(pct, s.start, s.end));
+        if (current) {
+          label = formatCornerName(current.name);
+          sub = "IN";
+          progress = sectionProgress(pct, current.start, current.end);
+        } else {
+          const next = list.find((s) => {
+            let d = s.start - pct;
+            if (d < 0) d += 1;
+            return d < 0.5;
+          }) ?? list[0];
+          if (next) {
+            label = formatCornerName(next.name);
+            sub = "NEXT";
+            let segLen = next.start - pct;
+            if (segLen < 0) segLen += 1;
+            const total = next.end - next.start;
+            const norm = total <= 0 ? total + 1 : total;
+            progress = Math.max(0, Math.min(1, 1 - segLen / Math.max(norm, 0.01)));
           }
-          // If we exhaust the loop pct >= all markers → currentIdx stays at last corner.
         }
-
-        // The widget shows the corner being APPROACHED, not the one just left.
-        const nextIdx = (currentIdx + 1) % turns.length;
-        const currentMarker = turns[currentIdx].marker;
-        const nextMarker = turns[nextIdx].marker;
-
-        // Segment length (circular).
-        let segLen = nextMarker - currentMarker;
-        if (segLen <= 0) segLen += 1;
-
-        // How far into the segment toward the upcoming corner the driver is
-        // (circular) — this doubles as the approach progress toward `nextIdx`.
-        let into = pct - currentMarker;
-        if (into < 0) into += 1;
-
-        progress = Math.max(0, Math.min(1, into / segLen));
-
-        // Numeric names ("1", "6a") get a "T" prefix; named corners are verbatim.
-        const raw = turns[nextIdx].name.trim();
-        label = /^\d+[a-z]?$/i.test(raw) ? `T${raw}` : raw;
-        // Eyebrow is additive ("NEXT"), not a repeat of the corner number the
-        // main label already shows.
-        sub = "NEXT";
       }
 
       if (labelRef.current) labelRef.current.textContent = label;
@@ -177,8 +186,6 @@ function CornerName({ theme, config }: BaseWidgetProps<CornerNameConfig>) {
 export const cornerNameDef: WidgetDefinition<CornerNameConfig> = {
   id: "corner-name",
   name: "Corner Name",
-  // Work in progress — hidden from the catalog in release builds (see contract).
-  draft: true,
   defaultSize: { w: 300, h: 76 },
   minSize: { w: 200, h: 64 },
   defaultConfig,

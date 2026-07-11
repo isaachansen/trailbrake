@@ -19,6 +19,8 @@ export const previewStore = new TelemetryStore();
 // `startPreviewMock` just begins feeding them.
 const scenarioStores: Record<string, TelemetryStore> = {
   "rejoin-indicator": new TelemetryStore(),
+  "slow-car-ahead": new TelemetryStore(),
+  traffic: new TelemetryStore(),
   "launch-assist": new TelemetryStore(),
 };
 
@@ -80,6 +82,9 @@ function startRejoinScenario(target: TelemetryStore): () => void {
     positionsGained: null,
     iratingDelta: null,
     tyre: null,
+    rollingLapAvgS: null,
+    lapDeltaVsAvgS: null,
+    positionProvisional: false,
     relLatM: null,
     relLonM: null,
     pitStatus: null,
@@ -124,6 +129,7 @@ function startRejoinScenario(target: TelemetryStore): () => void {
     target.ingestSlow({
       sim: "mock",
       trackName: "Watkins Glen International",
+      trackLengthM: 5430,
       sessionType: "Race",
       timeRemainingS: 1200,
       lapsRemaining: null,
@@ -143,6 +149,7 @@ function startRejoinScenario(target: TelemetryStore): () => void {
       spectatedCarIdx: 0,
       carName: "BMW M4 GT3 EVO",
       onTrack: true,
+      offTrack: true,
       inGarage: false,
       carLeft: null,
       carRight: null,
@@ -163,6 +170,14 @@ function startRejoinScenario(target: TelemetryStore): () => void {
       pitBoxDistM: null,
       sectorTimesS: { s1: null, s2: null, s3: null },
       sectorBestS: { s1: null, s2: null, s3: null },
+      sectorPrevTimesS: { s1: null, s2: null, s3: null },
+      sectorSessionBestS: { s1: null, s2: null, s3: null },
+      sectorSessionBestPrevS: { s1: null, s2: null, s3: null },
+      currentSectorIdx: null,
+      sectorElapsedS: null,
+      sectorProgress: null,
+      sectorLiveDeltaS: null,
+      sectorGhostBestS: { s1: null, s2: null, s3: null },
       brakeBiasPct: 0.56,
       absActive: false,
       tcActive: false,
@@ -171,6 +186,334 @@ function startRejoinScenario(target: TelemetryStore): () => void {
       fuelMix: null,
       p2pAvailable: null,
       tirePressures: { lfKpa: 127, rfKpa: 129, lrKpa: 122, rrKpa: 124 },
+      incidents: 4,
+      incidentLimit: 17,
+      driverCarRedline: 8000,
+      driverCarSlShiftRpm: 7300,
+      driverCarSlBlinkRpm: 7900,
+    } satisfies SlowSample);
+  }, 1000 / 5);
+
+  return () => {
+    window.clearInterval(fastTimer);
+    window.clearInterval(slowTimer);
+  };
+}
+
+/**
+ * Slow-car-ahead: player at race speed, opponent frozen just ahead.
+ * Logic now derives speed from ΔlapDistPct × trackLength / Δt, so the opponent
+ * must be within maxDistanceM (250 m) from the start. Player at 0.40, opponent
+ * at 0.44 → initial gap = 0.04 × 5430 ≈ 217 m. After two slow ticks the
+ * opponent's derived speed is ~0 m/s and the widget triggers.
+ */
+function startSlowCarScenario(target: TelemetryStore): () => void {
+  target.setCaps({ ...PREVIEW_CAPS });
+  const start = performance.now();
+  let tick = 0;
+
+  const blankCar = (carIdx: number, over: Partial<CarEntry>): CarEntry => ({
+    carIdx,
+    driverName: null,
+    carScreenName: null,
+    carClassId: 2,
+    classColor: 0x3d8bff,
+    carClassName: "GT3",
+    position: null,
+    classPosition: null,
+    lap: 8,
+    lapDistPct: 0,
+    gapToPlayerS: null,
+    lastLapS: null,
+    bestLapS: null,
+    onPitRoad: false,
+    inWorld: true,
+    irating: null,
+    safetyRating: null,
+    isPlayer: false,
+    carNumber: null,
+    country: null,
+    positionsGained: null,
+    iratingDelta: null,
+    tyre: null,
+    rollingLapAvgS: null,
+    lapDeltaVsAvgS: null,
+    positionProvisional: false,
+    relLatM: null,
+    relLonM: null,
+    pitStatus: null,
+    hasSessionFastest: null,
+    ...over,
+  });
+
+  const fastTimer = window.setInterval(() => {
+    const t = (performance.now() - start) / 1000;
+    tick += 1;
+    target.ingestFast({
+      ts: t,
+      tick,
+      readerHz: 60,
+      speedMs: 45,
+      rpm: 6500,
+      gear: 4,
+      throttle: 0.7,
+      brake: 0,
+      clutch: 0,
+      steeringRad: 0,
+      lapDistPct: 0.4 + (t % 20) * 0.002,
+      currentLapS: t,
+      brakeBiasPct: 0.56,
+      absActive: false,
+      tcActive: false,
+      carLeft: null,
+      carRight: null,
+    } satisfies FastSample);
+  }, 1000 / 30);
+
+  const slowTimer = window.setInterval(() => {
+    const t = (performance.now() - start) / 1000;
+    // Gap shrinks from ~4s → ~1s so closing + crawl both latch.
+    const gap = 4.0 - 1.5 * (1 + Math.sin(t * (TAU / 8)));
+    const playerPct = 0.4 + (t % 20) * 0.002;
+    const cars: CarEntry[] = [
+      blankCar(0, { driverName: "You", carNumber: "4", isPlayer: true, gapToPlayerS: 0, lapDistPct: playerPct }),
+      blankCar(7, {
+        driverName: "R. Parked",
+        carNumber: "99",
+        gapToPlayerS: Math.max(0.4, gap),
+        lapDistPct: 0.44, // frozen → derived speed ~0; 0.04×5430≈217 m ahead of player start
+      }),
+    ];
+    target.ingestSlow({
+      sim: "mock",
+      trackName: "Watkins Glen International",
+      trackLengthM: 5430,
+      sessionType: "Race",
+      timeRemainingS: 1200,
+      lapsRemaining: null,
+      totalCars: cars.length,
+      lap: 8,
+      position: 5,
+      classPosition: 2,
+      lastLapS: 107,
+      bestLapS: 106.6,
+      currentLapS: t,
+      deltaBestS: null,
+      deltaSessionBestS: null,
+      fuelL: 40,
+      fuelPerLapL: 2.4,
+      cars,
+      playerCarIdx: 0,
+      spectatedCarIdx: 0,
+      carName: "BMW M4 GT3 EVO",
+      onTrack: true,
+      offTrack: false,
+      inGarage: false,
+      carLeft: null,
+      carRight: null,
+      trackPath: null,
+      trackTurns: null,
+      trackMetadata: null,
+      flagsRaw: 0,
+      airTempC: 22,
+      trackTempC: 31,
+      windSpeedMs: 3.5,
+      windDirRad: 1.2,
+      trackWetnessPct: 0,
+      precipitationPct: 0,
+      humidityPct: 0.55,
+      messages: [],
+      chatMessages: [],
+      pitSpeedLimitMs: 22.35,
+      pitBoxDistM: null,
+      sectorTimesS: { s1: null, s2: null, s3: null },
+      sectorBestS: { s1: null, s2: null, s3: null },
+      sectorPrevTimesS: { s1: null, s2: null, s3: null },
+      sectorSessionBestS: { s1: null, s2: null, s3: null },
+      sectorSessionBestPrevS: { s1: null, s2: null, s3: null },
+      currentSectorIdx: null,
+      sectorElapsedS: null,
+      sectorProgress: null,
+      sectorLiveDeltaS: null,
+      sectorGhostBestS: { s1: null, s2: null, s3: null },
+      brakeBiasPct: 0.56,
+      absActive: false,
+      tcActive: false,
+      drsState: null,
+      ersPct: null,
+      fuelMix: null,
+      p2pAvailable: null,
+      tirePressures: { lfKpa: 127, rfKpa: 129, lrKpa: 122, rrKpa: 124 },
+      incidents: 4,
+      incidentLimit: 17,
+      driverCarRedline: 8000,
+      driverCarSlShiftRpm: 7300,
+      driverCarSlBlinkRpm: 7900,
+    } satisfies SlowSample);
+  }, 1000 / 5);
+
+  return () => {
+    window.clearInterval(fastTimer);
+    window.clearInterval(slowTimer);
+  };
+}
+
+/** Traffic: GTP car a lap up closing from behind (lapping). */
+function startTrafficScenario(target: TelemetryStore): () => void {
+  target.setCaps({ ...PREVIEW_CAPS });
+  const start = performance.now();
+  let tick = 0;
+
+  const blankCar = (carIdx: number, over: Partial<CarEntry>): CarEntry => ({
+    carIdx,
+    driverName: null,
+    carScreenName: null,
+    carClassId: 2,
+    classColor: 0x3d8bff,
+    carClassName: "GT3",
+    position: null,
+    classPosition: null,
+    lap: 8,
+    lapDistPct: 0,
+    gapToPlayerS: null,
+    lastLapS: null,
+    bestLapS: null,
+    onPitRoad: false,
+    inWorld: true,
+    irating: null,
+    safetyRating: null,
+    isPlayer: false,
+    carNumber: null,
+    country: null,
+    positionsGained: null,
+    iratingDelta: null,
+    tyre: null,
+    rollingLapAvgS: null,
+    lapDeltaVsAvgS: null,
+    positionProvisional: false,
+    relLatM: null,
+    relLonM: null,
+    pitStatus: null,
+    hasSessionFastest: null,
+    ...over,
+  });
+
+  const fastTimer = window.setInterval(() => {
+    const t = (performance.now() - start) / 1000;
+    tick += 1;
+    target.ingestFast({
+      ts: t,
+      tick,
+      readerHz: 60,
+      speedMs: 50,
+      rpm: 7000,
+      gear: 5,
+      throttle: 0.8,
+      brake: 0,
+      clutch: 0,
+      steeringRad: 0,
+      lapDistPct: 0.5,
+      currentLapS: t,
+      brakeBiasPct: 0.56,
+      absActive: false,
+      tcActive: false,
+      carLeft: null,
+      carRight: null,
+    } satisfies FastSample);
+  }, 1000 / 30);
+
+  const slowTimer = window.setInterval(() => {
+    const t = (performance.now() - start) / 1000;
+    const gap = 2.5 - 0.9 * (1 + Math.sin(t * (TAU / 6))); // shrinks → closing
+    const cars: CarEntry[] = [
+      blankCar(0, {
+        driverName: "You",
+        carNumber: "4",
+        isPlayer: true,
+        carClassId: 2,
+        carClassName: "GT3",
+        lap: 8,
+        gapToPlayerS: 0,
+        bestLapS: 106.6,
+        rollingLapAvgS: 107.2,
+      }),
+      blankCar(3, {
+        driverName: "L. Proto",
+        carNumber: "01",
+        carClassId: 1,
+        carClassName: "GTP",
+        classColor: 0x2fe08a,
+        lap: 9, // a lap up
+        gapToPlayerS: -Math.max(0.5, gap),
+        bestLapS: 98.0,
+        rollingLapAvgS: 98.5,
+      }),
+    ];
+    target.ingestSlow({
+      sim: "mock",
+      trackName: "Watkins Glen International",
+      trackLengthM: 5430,
+      sessionType: "Race",
+      timeRemainingS: 1200,
+      lapsRemaining: null,
+      totalCars: cars.length,
+      lap: 8,
+      position: 5,
+      classPosition: 2,
+      lastLapS: 107,
+      bestLapS: 106.6,
+      currentLapS: t,
+      deltaBestS: null,
+      deltaSessionBestS: null,
+      fuelL: 40,
+      fuelPerLapL: 2.4,
+      cars,
+      playerCarIdx: 0,
+      spectatedCarIdx: 0,
+      carName: "BMW M4 GT3 EVO",
+      onTrack: true,
+      offTrack: false,
+      inGarage: false,
+      carLeft: null,
+      carRight: null,
+      trackPath: null,
+      trackTurns: null,
+      trackMetadata: null,
+      flagsRaw: 0,
+      airTempC: 22,
+      trackTempC: 31,
+      windSpeedMs: 3.5,
+      windDirRad: 1.2,
+      trackWetnessPct: 0,
+      precipitationPct: 0,
+      humidityPct: 0.55,
+      messages: [],
+      chatMessages: [],
+      pitSpeedLimitMs: 22.35,
+      pitBoxDistM: null,
+      sectorTimesS: { s1: null, s2: null, s3: null },
+      sectorBestS: { s1: null, s2: null, s3: null },
+      sectorPrevTimesS: { s1: null, s2: null, s3: null },
+      sectorSessionBestS: { s1: null, s2: null, s3: null },
+      sectorSessionBestPrevS: { s1: null, s2: null, s3: null },
+      currentSectorIdx: null,
+      sectorElapsedS: null,
+      sectorProgress: null,
+      sectorLiveDeltaS: null,
+      sectorGhostBestS: { s1: null, s2: null, s3: null },
+      brakeBiasPct: 0.56,
+      absActive: false,
+      tcActive: false,
+      drsState: null,
+      ersPct: null,
+      fuelMix: null,
+      p2pAvailable: null,
+      tirePressures: { lfKpa: 127, rfKpa: 129, lrKpa: 122, rrKpa: 124 },
+      incidents: 4,
+      incidentLimit: 17,
+      driverCarRedline: 8000,
+      driverCarSlShiftRpm: 7300,
+      driverCarSlBlinkRpm: 7900,
     } satisfies SlowSample);
   }, 1000 / 5);
 
@@ -287,6 +630,8 @@ export function startPreviewMock(opts?: { flagsRawOverride?: number }): () => vo
   const stops = [
     startBrowserMock(previewStore, opts),
     startRejoinScenario(scenarioStores["rejoin-indicator"]),
+    startSlowCarScenario(scenarioStores["slow-car-ahead"]),
+    startTrafficScenario(scenarioStores.traffic),
     startLaunchAssistScenario(scenarioStores["launch-assist"]),
   ];
   return () => stops.forEach((stop) => stop());

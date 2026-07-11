@@ -90,6 +90,20 @@ export function flagOf(country: string | null | undefined): string {
   return FLAG[country.toUpperCase()] ?? "rgba(255,255,255,0.12)";
 }
 
+/** True when we have a hand-tuned CSS gradient for this country code. */
+export function hasFlagGradient(country: string | null | undefined): boolean {
+  return !!country && country.toUpperCase() in FLAG;
+}
+
+/** ISO 3166-1 alpha-2 → regional-indicator emoji (🇺🇸 etc.). */
+export function flagEmoji(country: string | null | undefined): string | null {
+  if (!country) return null;
+  const cc = country.toUpperCase();
+  if (!/^[A-Z]{2}$/.test(cc)) return null;
+  const A = 0x1f1e6;
+  return String.fromCodePoint(A + (cc.charCodeAt(0) - 65), A + (cc.charCodeAt(1) - 65));
+}
+
 /** Split a license string like "A 3.99" into its letter and SR number. */
 export function parseLicense(s: string | null | undefined): { letter: string; sr: string } | null {
   if (!s) return null;

@@ -332,6 +332,7 @@ export function startBrowserMock(
         // matching the row reorder the overtake animation is demoing.
         position: posByIdx.get(c.carIdx) ?? c.basePos,
         classPosition: classPosByIdx.get(c.carIdx) ?? 1,
+        positionProvisional: false,
         lap,
         lapDistPct: ((t / LAP_SECONDS) % 1 + gap / LAP_SECONDS + 1) % 1,
         gapToPlayerS: gap,
@@ -351,6 +352,8 @@ export function startBrowserMock(
         relLonM,
         pitStatus: 0,
         hasSessionFastest: c.carIdx === 0,
+        rollingLapAvgS: c.bestLapS + 0.5,
+        lapDeltaVsAvgS: 0.1 * Math.sin(t * 0.15 + c.carIdx),
       };
     });
 
@@ -358,6 +361,7 @@ export function startBrowserMock(
     const slow: SlowSample = {
       sim: "mock",
       trackName: "Watkins Glen International",
+      trackLengthM: 5430,
       sessionType: "Race",
       timeRemainingS: Math.max(1800 - t, 0),
       lapsRemaining: null,
@@ -385,6 +389,7 @@ export function startBrowserMock(
       // honest in isolation (e.g. widgets that show "your car").
       carName: player.car,
       onTrack: true,
+      offTrack: false,
       inGarage: false,
       // Tie the screen-edge spotter glow to the two weaving "near" cars so it
       // agrees with the Radar/Spotter widgets: idx 5 is on the left (relLatM -2.1,
@@ -415,21 +420,58 @@ export function startBrowserMock(
       // Pit info.
       pitSpeedLimitMs: 22.35,
       pitBoxDistM: null,
-      // Sector times for the Sector Delta widget. Sector delta is *progressive*:
-      // a sector's delta only exists once that sector is finished, and the whole
-      // set clears at the start/finish line. Demo that on a short looped "lap" —
-      // S1 appears, then S2, then S3, then it resets — each compared to a fixed
-      // best lap (one sector up/green, one close/amber, one down/red).
+      // Sector times for the Sector Delta widget. Progressive fill + previous-lap
+      // fallback + live in-sector delta (connector-backed fields).
       sectorBestS: {
         s1: LAP_SECONDS * 0.33,
         s2: LAP_SECONDS * 0.33,
         s3: LAP_SECONDS * 0.34,
       },
-      sectorTimesS: {
-        s1: (t % 13) / 13 >= 0.3 ? LAP_SECONDS * 0.33 + (-0.18 + 0.05 * Math.sin(t * 0.9)) : null,
-        s2: (t % 13) / 13 >= 0.62 ? LAP_SECONDS * 0.33 + (0.03 + 0.04 * Math.sin(t * 0.7)) : null,
-        s3: (t % 13) / 13 >= 0.9 ? LAP_SECONDS * 0.34 + (0.3 + 0.06 * Math.sin(t * 1.1)) : null,
+      sectorGhostBestS: {
+        s1: LAP_SECONDS * 0.33 - 0.2,
+        s2: LAP_SECONDS * 0.33 - 0.1,
+        s3: LAP_SECONDS * 0.34 - 0.15,
       },
+      sectorPrevTimesS: {
+        s1: LAP_SECONDS * 0.33 + 0.05,
+        s2: LAP_SECONDS * 0.33 + 0.12,
+        s3: LAP_SECONDS * 0.34 - 0.08,
+      },
+      sectorSessionBestS: {
+        s1: LAP_SECONDS * 0.33 - 0.1,
+        s2: LAP_SECONDS * 0.33,
+        s3: LAP_SECONDS * 0.34 - 0.05,
+      },
+      sectorSessionBestPrevS: {
+        s1: LAP_SECONDS * 0.33,
+        s2: null,
+        s3: LAP_SECONDS * 0.34,
+      },
+      sectorTimesS: {
+        s1: (t % 13) / 13 >= 0.3 ? LAP_SECONDS * 0.33 - 0.18 : null,
+        s2: (t % 13) / 13 >= 0.62 ? LAP_SECONDS * 0.33 + 0.03 : null,
+        s3: (t % 13) / 13 >= 0.9 ? LAP_SECONDS * 0.34 + 0.3 : null,
+      },
+      currentSectorIdx: (() => {
+        const p = (t % 13) / 13;
+        if (p < 0.3) return 0;
+        if (p < 0.62) return 1;
+        return 2;
+      })(),
+      sectorElapsedS: (() => {
+        const p = (t % 13) / 13;
+        if (p >= 0.9) return null;
+        const start = p < 0.3 ? 0 : p < 0.62 ? 0.3 : 0.62;
+        return (p - start) * LAP_SECONDS;
+      })(),
+      sectorProgress: (() => {
+        const p = (t % 13) / 13;
+        if (p >= 0.9) return null;
+        const start = p < 0.3 ? 0 : p < 0.62 ? 0.3 : 0.62;
+        const end = p < 0.3 ? 0.3 : p < 0.62 ? 0.62 : 0.9;
+        return Math.min(1, Math.max(0, (p - start) / (end - start)));
+      })(),
+      sectorLiveDeltaS: (t % 13) / 13 < 0.9 ? -0.05 + 0.12 * Math.sin(t * 0.8) : null,
       // In-car setup.
       brakeBiasPct: 0.56,
       absActive: brake > 0.8,
@@ -439,6 +481,12 @@ export function startBrowserMock(
       fuelMix: null,
       p2pAvailable: null,
       tirePressures: { lfKpa: 127, rfKpa: 129, lrKpa: 122, rrKpa: 124 },
+      incidents: 4,
+      incidentLimit: 17,
+      // BMW M4 GT3 EVO shift-light thresholds (from iRacing session YAML).
+      driverCarRedline: 8000,
+      driverCarSlShiftRpm: 7300,
+      driverCarSlBlinkRpm: 7900,
     };
     target.ingestSlow(slow);
   }, 1000 / SLOW_HZ);

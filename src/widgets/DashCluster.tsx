@@ -8,12 +8,19 @@
 // colors and wheel rotation straight into the DOM through refs — so it tracks the
 // physics rate without stuttering React.
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStoreInstance } from "../store/storeContext";
 import { useSettings } from "../store/appSettings";
 import { useCarName } from "./useCarName";
 import { speedValue, speedLabel } from "./format";
-import { resolveCarLeds, gearLeds } from "./carLeds";
+import { resolveCarLeds } from "./carLeds";
+import {
+  FALLBACK_LED_COUNT,
+  SHIFT_LED_SHAPE_OPTIONS,
+  ShiftLedStrip,
+  paintShiftLeds,
+  type ShiftLedShape,
+} from "./shiftLeds";
 import { GEAR_COLOR_PRESETS } from "./raceColors";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
@@ -25,6 +32,8 @@ export interface DashClusterConfig {
    *  car is recognized (real LED count / thresholds / colors per gear). */
   useCarData: boolean;
   showLeds: boolean;
+  /** Visual shape of each shift light. */
+  ledShape: ShiftLedShape;
   /** A compact throttle/brake trace in the center. */
   showInputs: boolean;
   showSteering: boolean;
@@ -36,12 +45,12 @@ const defaultConfig: DashClusterConfig = {
   redlineRpm: 8500,
   useCarData: true,
   showLeds: true,
+  ledShape: "line",
   showInputs: false,
   showSteering: true,
   gearColor: "#ffffff",
 };
 
-const LED_COUNT = 16;
 /** Window (s) shown by the mini input trace. */
 const INPUT_WINDOW = 5;
 
@@ -67,10 +76,23 @@ function DashCluster({ theme, config, caps, size }: BaseWidgetProps<DashClusterC
     () => (config.useCarData ? resolveCarLeds(carName) : null),
     [carName, config.useCarData]
   );
-  const ledCount = config.showLeds && profile ? profile.ledCount : LED_COUNT;
+  const ledCount = config.showLeds && profile ? profile.ledCount : FALLBACK_LED_COUNT;
+  const ledShape = config.ledShape ?? "line";
 
-  const live = useRef({ config, units, profile, ledCount });
-  live.current = { config, units, profile, ledCount };
+  // SDK shift-light thresholds from session YAML — change only on session/car
+  // change, so subscribe narrowly to avoid re-renders on every slow tick.
+  const [sdkRedline, setSdkRedline] = useState<number | null>(() => store.getSlow()?.driverCarRedline ?? null);
+  const [sdkBlinkRpm, setSdkBlinkRpm] = useState<number | null>(() => store.getSlow()?.driverCarSlBlinkRpm ?? null);
+  useEffect(() => {
+    return store.subscribeSlow(() => {
+      const slow = store.getSlow();
+      setSdkRedline((prev) => { const v = slow?.driverCarRedline ?? null; return v !== prev ? v : prev; });
+      setSdkBlinkRpm((prev) => { const v = slow?.driverCarSlBlinkRpm ?? null; return v !== prev ? v : prev; });
+    });
+  }, [store]);
+
+  const live = useRef({ config, units, profile, ledCount, ledShape, sdkRedline, sdkBlinkRpm });
+  live.current = { config, units, profile, ledCount, ledShape, sdkRedline, sdkBlinkRpm };
 
   // Cache the input-trace canvas's CSS size via ResizeObserver instead of
   // calling getBoundingClientRect() every animation frame (that forces a layout
@@ -92,7 +114,7 @@ function DashCluster({ theme, config, caps, size }: BaseWidgetProps<DashClusterC
   useEffect(() => {
     let raf = 0;
     const draw = () => {
-      const { config, units, profile, ledCount } = live.current;
+      const { config, units, profile, ledCount, ledShape, sdkRedline, sdkBlinkRpm } = live.current;
       const s = store.latestFast;
       if (s) {
         const gear = s.gear == null ? "N" : s.gear < 0 ? "R" : s.gear === 0 ? "N" : String(s.gear);
@@ -101,48 +123,19 @@ function DashCluster({ theme, config, caps, size }: BaseWidgetProps<DashClusterC
         const sv = speedValue(s.speedMs, units);
         if (speedRef.current) setText(speedRef.current, sv == null ? "--" : String(Math.round(sv)));
 
-        const rpm = s.rpm ?? 0;
-
-        if (profile) {
-          // Real per-car shift lights: each LED has its own RPM threshold (by
-          // gear), its own color, and the whole strip flashes at the redline.
-          const g = gearLeds(profile, s.gear);
-          const redline = g?.redline ?? config.redlineRpm;
-          const blinkMs = profile.blinkIntervalMs || 250;
-          const flash = rpm >= redline && Math.floor(performance.now() / blinkMs) % 2 === 0;
-          for (let i = 0; i < ledCount; i++) {
-            const el = ledRefs.current[i];
-            if (!el) continue;
-            // Physical gap segments ("#000000" in the community data) are
-            // stripped from the profile at load time (see carLeds.ts), so
-            // every LED here is real and participates in sweep + flash.
-            const col = profile.colors[i] ?? t.accent;
-            const on = g ? rpm >= g.leds[i] : false;
-            if (flash) {
-              el.style.background = "#cfe8ff";
-              el.style.boxShadow = "0 0 9px #cfe8ff";
-            } else {
-              el.style.background = on ? col : "rgba(255,255,255,0.08)";
-              el.style.boxShadow = on ? `0 0 7px ${col}` : "none";
-            }
-          }
-        } else {
-          // Fallback: flat redline, evenly-spaced LEDs, fixed color bands.
-          const rpmPct = Math.max(0, Math.min(1, rpm / config.redlineRpm));
-          const flash = rpmPct > 0.97 && Math.floor(performance.now() / 70) % 2 === 0;
-          for (let i = 0; i < ledCount; i++) {
-            const el = ledRefs.current[i];
-            if (!el) continue;
-            const on = (i + 0.5) / ledCount <= rpmPct;
-            const col = i < 6 ? t.throttle : i < 11 ? t.loss : t.accent;
-            if (flash) {
-              el.style.background = "#cfe8ff";
-              el.style.boxShadow = "0 0 9px #cfe8ff";
-            } else {
-              el.style.background = on ? col : "rgba(255,255,255,0.08)";
-              el.style.boxShadow = on ? `0 0 7px ${col}` : "none";
-            }
-          }
+        if (config.showLeds) {
+          paintShiftLeds(
+            ledRefs.current,
+            ledCount,
+            s.rpm ?? 0,
+            s.gear,
+            profile,
+            config.redlineRpm,
+            { accent: t.accent, throttle: t.throttle, loss: t.loss },
+            ledShape,
+            sdkRedline,
+            sdkBlinkRpm,
+          );
         }
 
         if (steerWrap.current) {
@@ -186,30 +179,47 @@ function DashCluster({ theme, config, caps, size }: BaseWidgetProps<DashClusterC
   // Shrink the wheel a bit once height gets tight so the label clears the
   // panel edge instead of crowding it.
   const compactWheel = size.h < 135;
-  const wheelEm = compactWheel ? "4.4em" : "5.4em";
-  const wheelLabelGap = compactWheel ? 3 : 6;
+  const wheelEm = compactWheel ? "3.6em" : "4.4em";
+  const wheelLabelGap = compactWheel ? 2 : 4;
+
+  // Floor for the gear tile — percentage height alone lets the square collapse
+  // under the 4em digit when the box is dragged small; em mins keep it readable
+  // until the host's minSize clamp stops the resize.
+  const gearTileMin = "5.2em";
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: "12px 16px 14px", boxSizing: "border-box", overflow: "hidden" }}>
       {config.showLeds && (
-        // keyed on ledCount so the row fully remounts (and `ledRefs` resets) when
-        // the recognized car's LED count differs from the fallback strip.
-        <div key={ledCount} style={{ display: "flex", gap: 4, marginBottom: 12 }}>
-          {Array.from({ length: ledCount }, (_, i) => (
-            <div
-              key={i}
-              ref={(el) => (ledRefs.current[i] = el)}
-              style={{ flex: 1, height: 8, borderRadius: 3, background: "rgba(255,255,255,0.08)" }}
-            />
-          ))}
-        </div>
+        <ShiftLedStrip
+          ledCount={ledCount}
+          shape={ledShape}
+          ledRefs={ledRefs}
+          style={{ marginBottom: 12, height: 26, maxHeight: 26, flexShrink: 0 }}
+        />
       )}
 
       <div style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "stretch", gap: 12 }}>
         {/* Gear — a rounded SQUARE cell (matching the Input graph's gear cell):
             it fills the row height and its width tracks that height via the 1:1
             aspect ratio, so it reads as a square tile rather than a tall pill. */}
-        <div style={{ flex: "0 0 auto", alignSelf: "center", height: "84%", aspectRatio: "1 / 1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: t.cell, borderRadius: 16, boxSizing: "border-box", overflow: "hidden" }}>
+        <div
+          style={{
+            flex: "0 0 auto",
+            alignSelf: "center",
+            height: "84%",
+            minHeight: gearTileMin,
+            minWidth: gearTileMin,
+            aspectRatio: "1 / 1",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            background: t.cell,
+            borderRadius: 16,
+            boxSizing: "border-box",
+            overflow: "hidden",
+          }}
+        >
           <div ref={gearRef} style={{ fontFamily: theme.font.family, fontWeight: 700, fontSize: "4em", lineHeight: 0.82, color: config.gearColor ?? "#ffffff" }}>N</div>
           <div style={{ fontFamily: theme.font.label, fontSize: "0.6em", fontWeight: 600, letterSpacing: "0.22em", color: t.textDim, marginTop: 3 }}>GEAR</div>
         </div>
@@ -249,7 +259,19 @@ export const dashClusterDef: WidgetDefinition<DashClusterConfig> = {
   id: "dash-cluster",
   name: "Dash Cluster",
   defaultSize: { w: 470, h: 150 },
-  minSize: { w: 300, h: 116 },
+  // Hard floor so the gear tile + speed (+ wheel) never get dragged into a
+  // squished layout. Width grows when steering is on via minContentWidth.
+  minSize: { w: 320, h: 142 },
+  minContentWidth: (c) => (c.showSteering === false ? 320 : 380),
+  // Stacked LED strip contributes a fixed band; toggling it resizes the box
+  // instead of stretching the gear/speed row into the freed space.
+  contentHeight: (c) => {
+    const pad = 26; // 12 top + 14 bottom
+    const leds = c.showLeds !== false ? 38 : 0; // 26 strip + 12 margin
+    const row = 86; // gear tile + speed row at a comfortable size
+    const inputs = c.showInputs ? 28 : 0;
+    return pad + leds + row + inputs;
+  },
   defaultConfig,
   // Reads store.latestFast/history at 60fps (fast) plus the live car's name
   // (slow, via useCarName) to resolve its shift-light profile.
@@ -259,6 +281,13 @@ export const dashClusterDef: WidgetDefinition<DashClusterConfig> = {
     { key: "useCarData", label: "Use car shift-light data", type: "boolean" },
     { key: "redlineRpm", label: "Redline (fallback)", type: "number", min: 4000, max: 15000, step: 100 },
     { key: "showLeds", label: "Shift lights", type: "boolean" },
+    {
+      key: "ledShape",
+      label: "LED shape",
+      type: "enum",
+      options: [...SHIFT_LED_SHAPE_OPTIONS],
+      visibleWhen: (c) => c.showLeds !== false,
+    },
     { key: "showInputs", label: "Input graph", type: "boolean" },
     { key: "showSteering", label: "Steering", type: "boolean" },
     { key: "gearColor", label: "Gear color", type: "color", presets: GEAR_COLOR_PRESETS },

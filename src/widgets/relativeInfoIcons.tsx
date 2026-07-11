@@ -91,6 +91,14 @@ const PATHS: Record<string, ReactNode> = {
       <circle cx="16" cy="8" r="1.4" />
     </>
   ),
+  // Caution triangle — incident points vs session DQ limit.
+  incidents: (
+    <>
+      <path d="M12 3.5 21.5 20H2.5Z" />
+      <path d="M12 9.5v5" />
+      <circle cx="12" cy="17.2" r="1.1" fill="currentColor" stroke="none" />
+    </>
+  ),
 };
 
 export function hasInfoIcon(key: string): boolean {

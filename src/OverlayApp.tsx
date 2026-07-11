@@ -10,7 +10,7 @@ import { editModeStore } from "./store/editMode";
 import { startHitRegionReporting } from "./store/hitRegions";
 import { controls, type VrWidgetLayout } from "./store/controls";
 import { useCaps, useSlow } from "./store/hooks";
-import { useVrStatus, useStatus } from "./store/session";
+import { useVrStatus, useStatus, statusStore } from "./store/session";
 import { useSettings } from "./store/appSettings";
 import { store } from "./store/store";
 import { startBrowserMock } from "./store/mockSource";
@@ -53,10 +53,11 @@ export default function OverlayApp() {
     const stop = startBrowserMock(store);
     return () => {
       stop();
-      // Drop the last mock frame so widgets fall back to their honest empty
-      // states instead of freezing on fake data once the mock stops (e.g. a
-      // real session is about to take over, or preview was turned off).
-      store.clear();
+      // Keep the last mock frame while a live session is taking over so widgets
+      // don't flash empty for a frame. Only wipe when we're genuinely idle.
+      if (!statusStore.get().sessionActive) {
+        store.clear();
+      }
     };
   }, [idlePreview]);
 

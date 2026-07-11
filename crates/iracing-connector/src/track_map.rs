@@ -34,9 +34,46 @@ use serde::Deserialize;
 struct BakedTrack {
     points: Vec<[f32; 2]>,
     #[serde(default)]
+    broken: bool,
+    #[serde(default)]
+    unsupported_reason: Option<String>,
+    #[serde(default)]
     turns: Vec<TrackTurn>,
     #[serde(default)]
     metadata: Option<TrackMetadata>,
+}
+
+/// Figure-8 / dual-path layouts where a single loop misplaces cars.
+const BROKEN_TRACK_IDS: &[u32] = &[
+    175, 176, 207, 209, 211, 193, 217, 388, 437, 452, 506,
+];
+
+/// Whether this track id is known unsupported for the track map widget.
+pub fn is_broken(track_id: u32) -> bool {
+    if BROKEN_TRACK_IDS.contains(&track_id) {
+        return true;
+    }
+    maps()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&track_id)
+        .map(|t| t.broken || t.points.is_empty())
+        .unwrap_or(false)
+}
+
+fn unsupported_reason_for(track_id: u32) -> Option<String> {
+    if let Some(t) = maps().read().unwrap_or_else(|e| e.into_inner()).get(&track_id) {
+        if let Some(r) = &t.unsupported_reason {
+            return Some(r.clone());
+        }
+        if t.broken {
+            return Some("Track map unavailable for this layout".to_string());
+        }
+    }
+    if BROKEN_TRACK_IDS.contains(&track_id) {
+        return Some("Track map unavailable for this layout".to_string());
+    }
+    None
 }
 
 const RAW: &str = include_str!("../assets/track_maps.json");
@@ -61,10 +98,14 @@ fn parse(raw: &str) -> HashMap<u32, BakedTrack> {
 /// Returns an owned clone (the snapshot needs an owned `Vec`); `None` when the
 /// track isn't in the bundle (e.g. the user hasn't fetched maps yet).
 pub fn path_for(track_id: u32) -> Option<Vec<[f32; 2]>> {
+    if is_broken(track_id) {
+        return None;
+    }
     maps()
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .get(&track_id)
+        .filter(|t| !t.points.is_empty())
         .map(|t| t.points.clone())
 }
 
@@ -83,11 +124,20 @@ pub fn turns_for(track_id: u32) -> Option<Vec<TrackTurn>> {
 /// `track_id`, if any is bundled. `None` when the track is absent or has no
 /// metadata.
 pub fn metadata_for(track_id: u32) -> Option<TrackMetadata> {
-    maps()
+    let mut md = maps()
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .get(&track_id)
-        .and_then(|t| t.metadata.clone())
+        .and_then(|t| t.metadata.clone());
+    let reason = unsupported_reason_for(track_id);
+    if reason.is_none() && md.is_none() {
+        return None;
+    }
+    let mut out = md.take().unwrap_or_default();
+    if out.unsupported_reason.is_none() {
+        out.unsupported_reason = reason;
+    }
+    Some(out)
 }
 
 /// Merge a downloaded track-map bundle into the in-memory registry. Entries in

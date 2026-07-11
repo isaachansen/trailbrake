@@ -19,19 +19,52 @@
 import { useEffect, useRef } from "react";
 import { useStoreInstance } from "../store/storeContext";
 import { classColorMap, classColorOf } from "./raceColors";
+import { sectorColorKey, sectorStrokeColor } from "./sectorColors";
 import { WidgetTitle } from "./WidgetTitle";
 import { classifySessionType } from "./contract";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
-import type { SlowSample } from "../store/types";
+import type { Sectors, SlowSample } from "../store/types";
 
 export interface TrackMapConfig {
   showField: boolean;
   classColors: boolean;
   /** In qualifying, show only the player dot (solo hot lap — no field). */
   soloInQualy: boolean;
+  /**
+   * Reference for sector arc colors — same semantics as Sector Delta.
+   * Only completed sectors this lap are colored; incomplete stay neutral.
+   */
+  sectorReference: "personal" | "session" | "ghost";
 }
 
-const defaultConfig: TrackMapConfig = { showField: true, classColors: false, soloInQualy: true };
+const defaultConfig: TrackMapConfig = {
+  showField: true,
+  classColors: false,
+  soloInQualy: true,
+  sectorReference: "ghost",
+};
+
+function hasAnySector(s: Sectors): boolean {
+  return s.s1 != null || s.s2 != null || s.s3 != null;
+}
+
+/** Ghost → session → personal fallthrough when the preferred splits are missing. */
+function resolveSectorReference(
+  requested: TrackMapConfig["sectorReference"],
+  slow: SlowSample
+): TrackMapConfig["sectorReference"] {
+  if (requested !== "ghost") return requested;
+  if (hasAnySector(slow.sectorGhostBestS)) return "ghost";
+  if (hasAnySector(slow.sectorSessionBestS)) return "session";
+  return "personal";
+}
+
+function sectorRefSplit(slow: SlowSample, mode: TrackMapConfig["sectorReference"], idx: 0 | 1 | 2): number | null {
+  const key = (["s1", "s2", "s3"] as const)[idx];
+  if (mode === "ghost") return slow.sectorGhostBestS[key];
+  if (mode === "session") return slow.sectorSessionBestS[key] ?? slow.sectorBestS[key];
+  return slow.sectorBestS[key];
+}
 
 /** A centerline whose point index i maps to lap-distance fraction i/N. */
 interface PathGeom {
@@ -58,6 +91,50 @@ function posAt(g: PathGeom, frac: number): [number, number] {
   const a = g.pts[i];
   const b = g.pts[(i + 1) % n];
   return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
+}
+
+/**
+ * Unit tangent of the centerline at `frac` (direction of travel). Uniform
+ * screen scale means the same vector is the screen-space tangent, so the
+ * perpendicular `[-ty, tx]` is a true cross-track tick.
+ */
+function tangentAt(g: PathGeom, frac: number): [number, number] {
+  const n = g.pts.length;
+  if (n < 2) return [1, 0];
+  const f = ((((frac % 1) + 1) % 1)) * n;
+  const i0 = Math.floor(f) % n;
+  // Prefer the local segment; if it's degenerate (duplicate points), walk
+  // neighbors until we get a usable chord.
+  for (let k = 0; k < n; k++) {
+    const a = g.pts[(i0 + k) % n];
+    const b = g.pts[(i0 + k + 1) % n];
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const len = Math.hypot(dx, dy);
+    if (len > 1e-9) return [dx / len, dy / len];
+  }
+  return [1, 0];
+}
+
+/** Short cross-track tick centered on `(x,y)`, perpendicular to unit tangent `tan`. */
+function drawCrossTrackTick(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  tan: [number, number],
+  halfLen: number,
+  width: number,
+  color: string,
+) {
+  const nx = -tan[1];
+  const ny = tan[0];
+  ctx.beginPath();
+  ctx.moveTo(x - nx * halfLen, y - ny * halfLen);
+  ctx.lineTo(x + nx * halfLen, y + ny * halfLen);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = "butt";
+  ctx.stroke();
 }
 
 function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
@@ -121,6 +198,27 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
       const path = slow?.trackPath ?? null;
       if (nameRef.current) setText(nameRef.current, (slow?.trackName ?? "").toUpperCase());
       if (!path || path.length < 3) {
+        const reason = slow?.trackMetadata?.unsupportedReason;
+        if (reason && w > 0 && h > 0) {
+          ctx.fillStyle = t.textDim;
+          ctx.font = `600 ${Math.max(10, Math.round(h * 0.07))}px ${theme.font.label}`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          const words = reason.split(" ");
+          let line = "";
+          const lines: string[] = [];
+          for (const word of words) {
+            const test = line ? `${line} ${word}` : word;
+            if (ctx.measureText(test).width > w - 24 && line) {
+              lines.push(line);
+              line = word;
+            } else line = test;
+          }
+          if (line) lines.push(line);
+          const lh = Math.max(12, h * 0.09);
+          const y0 = h / 2 - ((lines.length - 1) * lh) / 2;
+          lines.forEach((ln, i) => ctx.fillText(ln, w / 2, y0 + i * lh));
+        }
         raf = requestAnimationFrame(draw);
         return;
       }
@@ -156,10 +254,64 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
 
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
+
+      const sectorStarts = (() => {
+        const meta = slow?.trackMetadata?.sectors ?? [];
+        if (meta.length >= 2) return [0, ...meta.slice(1).map((s) => s.marker), 1];
+        return [0, 0.33, 0.66, 1];
+      })();
+      // Sector arcs: only color AFTER this lap's split is in — same meaning as
+      // Sector Delta (purple/green/amber/red vs the chosen reference). Incomplete
+      // / current / ahead sectors stay neutral so the map never implies a result
+      // you haven't earned yet.
+      const sectorTimes = [slow?.sectorTimesS?.s1 ?? null, slow?.sectorTimesS?.s2 ?? null, slow?.sectorTimesS?.s3 ?? null];
+      const refMode = slow != null ? resolveSectorReference(config.sectorReference ?? "ghost", slow) : "personal";
+      const nPts = g.pts.length;
+      for (let si = 0; si < 3; si++) {
+        const f0 = sectorStarts[si] ?? si / 3;
+        const f1 = sectorStarts[si + 1] ?? (si + 1) / 3;
+        let i0 = Math.floor(f0 * nPts) % nPts;
+        let i1 = Math.floor(f1 * nPts) % nPts;
+        ctx.beginPath();
+        let first = true;
+        const step = i0 <= i1 ? 1 : 1;
+        for (let stepI = 0, idx = i0; stepI <= nPts; stepI++, idx = (idx + step) % nPts) {
+          const p = g.pts[idx];
+          if (first) {
+            ctx.moveTo(MX(p), MY(p));
+            first = false;
+          } else ctx.lineTo(MX(p), MY(p));
+          if (idx === i1) break;
+          if (stepI >= nPts) break;
+        }
+        const cur = sectorTimes[si];
+        const ref = slow != null ? sectorRefSplit(slow, refMode, si as 0 | 1 | 2) : null;
+        // No current-lap split → dim. Never paint from previous-lap or live guess.
+        const colorKey = cur != null ? sectorColorKey(cur, ref) : "dim";
+        ctx.lineWidth = 6;
+        ctx.strokeStyle = sectorStrokeColor(t, colorKey);
+        ctx.stroke();
+      }
+
+      for (let si = 1; si < sectorStarts.length - 1; si++) {
+        const frac = sectorStarts[si];
+        const p = posAt(g, frac);
+        drawCrossTrackTick(
+          ctx,
+          MX(p),
+          MY(p),
+          tangentAt(g, frac),
+          4,
+          2,
+          "rgba(255,255,255,0.85)",
+        );
+      }
+
       const stroke = (lw: number, color: string) => {
         ctx.beginPath();
         g.pts.forEach((p, i) => (i ? ctx.lineTo(MX(p), MY(p)) : ctx.moveTo(MX(p), MY(p))));
         ctx.closePath();
+        ctx.lineCap = "round";
         ctx.lineWidth = lw;
         ctx.strokeStyle = color;
         ctx.stroke();
@@ -169,10 +321,9 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
       stroke(8, "rgba(0,0,0,0.4)");
       stroke(3.4, "rgba(255,255,255,0.5)");
 
-      // Start/finish tick.
+      // Start/finish tick — same cross-track treatment as sector markers.
       const sf = posAt(g, 0);
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(MX(sf) - 1.5, MY(sf) - 5, 3, 10);
+      drawCrossTrackTick(ctx, MX(sf), MY(sf), tangentAt(g, 0), 5, 3, "#fff");
 
       const dot = (
         p: [number, number],
@@ -281,6 +432,16 @@ export const trackMapDef: WidgetDefinition<TrackMapConfig> = {
     { key: "showField", label: "Show field", type: "boolean" },
     { key: "classColors", label: "Class colors", type: "boolean" },
     { key: "soloInQualy", label: "Solo in qualy", type: "boolean" },
+    {
+      key: "sectorReference",
+      label: "Sector colors vs",
+      type: "enum",
+      options: [
+        { value: "ghost", label: "Reference Lap" },
+        { value: "session", label: "Session Best" },
+        { value: "personal", label: "Personal Best" },
+      ],
+    },
   ],
   Component: TrackMap,
 };

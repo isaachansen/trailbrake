@@ -7,8 +7,9 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSlow, useCaps } from "../store/hooks";
-import { fmtGap, fmtLapTime, hexToRgba } from "./format";
-import { flagOf, parseLicense, classColorMap, classColorOf } from "./raceColors";
+import { fmtGap, fmtLapTime, fmtDelta, hexToRgba } from "./format";
+import { parseLicense, classColorMap, classColorOf } from "./raceColors";
+import { FlagSwatch } from "./FlagSwatch";
 import { LicenseBadge } from "./LicenseBadge";
 import { TyreBadge } from "./TyreBadge";
 import { PitBadge } from "./PitBadge";
@@ -45,6 +46,43 @@ const defaultConfig: StandingsConfig = {
   showTyre: true,
   showCarIcon: true,
 };
+
+/** Average iRating across rated cars — matches iRacing's Strength of Field. */
+function strengthOfField(cars: CarEntry[]): number | null {
+  const rated = cars.map((c) => c.irating).filter((v): v is number => v != null);
+  if (rated.length === 0) return null;
+  return Math.round(rated.reduce((a, b) => a + b, 0) / rated.length);
+}
+
+function SofValue({ value, theme, mono, t }: { value: number; theme: Theme; mono: string; t: Theme["colors"] }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "baseline", gap: 4, fontSize: "0.68em" }}>
+      <span style={{ fontFamily: theme.font.label, letterSpacing: "0.06em", fontWeight: 700, color: t.textDim }}>SOF</span>
+      <span style={{ fontFamily: mono, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: t.text }}>{value}</span>
+    </span>
+  );
+}
+
+/** Exact pixel height of the standings body for the rows currently on screen. */
+function standingsContentHeightPx(
+  groups: { id: number | null; name: string | null; display: RowCtx[] }[],
+  rowsByGroup: Map<string, StandingsRowState[]>,
+  fontPx: number,
+  multiclass: boolean,
+  showSofBar: boolean,
+): number {
+  const rowH = 1.9 * fontPx + 4;
+  const colH = 1.6 * fontPx;
+  let h = 12 + colH + 6; // root padding + column header + bottom breathing room
+  if (showSofBar) h += 1.1 * fontPx + 6;
+  for (const g of groups) {
+    if (multiclass && g.name) h += 1.3 * fontPx + 10;
+    const key = String(g.id ?? "all");
+    const animRows = rowsByGroup.get(key) ?? [];
+    h += Math.max(g.display.length, animRows.length) * rowH;
+  }
+  return h;
+}
 
 interface RowCtx {
   car: CarEntry;
@@ -233,7 +271,8 @@ function StandingsRow({ x, slot, exiting, rowh, template, colgap, padx, cols, ta
   );
 }
 
-function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
+function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps<StandingsConfig>) {
+  const allocation = allocatedSize ?? size;
   const slow = useSlow();
   const capsLive = useCaps() ?? caps;
   const playerIdx = slow?.playerCarIdx ?? null;
@@ -244,6 +283,23 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
   // practice entities or still in the garage. Relative filters `inWorld` so only
   // cars actually loaded near you show as neighbours; standings is always global.
   const field = slow?.cars ?? [];
+  const showSof = (capsLive?.irating ?? false) && field.some((c) => c.irating != null);
+  const fieldSof = useMemo(() => strengthOfField(field), [field]);
+  const sofByClass = useMemo(() => {
+    const byClass = new Map<number | null, CarEntry[]>();
+    for (const c of field) {
+      const id = c.carClassId ?? null;
+      const list = byClass.get(id);
+      if (list) list.push(c);
+      else byClass.set(id, [c]);
+    }
+    const out = new Map<number | null, number>();
+    for (const [id, list] of byClass) {
+      const sof = strengthOfField(list);
+      if (sof != null) out.set(id, sof);
+    }
+    return out;
+  }, [field]);
   const { provPos, provClassPos } = useMemo(() => buildProvisionalPositions(field), [field]);
   const sortKey = (c: CarEntry) => standingSortKey(c, config.multiclass, provPos, provClassPos);
   let cars = [...field].sort((a, b) => sortKey(a) - sortKey(b));
@@ -265,7 +321,7 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
   const [fontPx, setFontPx] = useState(13);
   useEffect(() => {
     const el = rootRef.current;
-    if (!el) return;
+    if (!el || allocation.h <= 0) return;
     const measure = () => {
       const fontPx = parseFloat(getComputedStyle(el).fontSize) || 13;
       const nc = config.multiclass ? numClasses : 0;
@@ -274,10 +330,10 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
       const rowH = 1.9 * fontPx + 4;
       const colH = 1.6 * fontPx;
       const classH = nc * (1.3 * fontPx + 10);
-      // Root padding (12, from the 6px 10px outer padding) + a small safety
-      // margin so the last row is never clipped and there's always clean
-      // padding at the bottom.
-      const fit = Math.max(1, Math.floor((el.clientHeight - 12 - colH - classH - 6) / rowH));
+      const sofBarH = !config.multiclass && showSof && fieldSof != null ? 1.1 * fontPx + 6 : 0;
+      // Row budget comes from the user's allocated resize box, not the
+      // content-hugging chrome height — otherwise shrinking the panel hides rows.
+      const fit = Math.max(1, Math.floor((allocation.h - 12 - colH - classH - sofBarH - 6) / rowH));
       setFitRows((p) => (p === fit ? p : fit));
       setFontPx((p) => (p === fontPx ? p : fontPx));
     };
@@ -285,7 +341,7 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [config.multiclass, numClasses]);
+  }, [config.multiclass, numClasses, showSof, fieldSof, allocation.h]);
   // Slot height (em) for one animated row, matching the `rowH` used in the fit
   // measurement above so the absolute-positioned layout reserves the same
   // space natural flow used to.
@@ -310,6 +366,7 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
     lic: config.showLicense && cars.some((c) => c.safetyRating),
     ir: config.showIrating && (capsLive?.irating ?? false) && cars.some((c) => c.irating != null),
     tyre: config.showTyre && cars.some((c) => c.tyre),
+    lapTrend: cars.some((c) => c.lapDeltaVsAvgS != null),
   };
 
   const numCell = (s: string, color: string): ReactNode => (
@@ -325,7 +382,7 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
       if (pos == null) return <span style={{ color: t.textDim2 }}>--</span>;
       return (
         <span
-          title={provisional ? "Provisional — grid order seeded by iRating (no session position set yet)" : undefined}
+          title={provisional ? "Provisional — grid, qualify, or car-number order (no live session position yet)" : undefined}
           style={{
             display: "inline-flex",
             alignItems: "center",
@@ -337,7 +394,6 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
             background: provisional ? "transparent" : "rgba(0,0,0,0.28)",
             boxShadow: provisional ? `inset 0 0 0 1px ${hexToRgba("#ffffff", 0.22)}` : "none",
             fontVariantNumeric: "tabular-nums",
-            fontStyle: provisional ? "italic" : "normal",
             fontWeight: x.isPlayer ? 800 : 700,
             color: x.isPlayer ? "#fff" : provisional ? t.textDim : t.text,
           }}
@@ -382,13 +438,13 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
   if (has.flag)
     cols.push({
       id: "flag", w: "1.4em", head: "", align: "c",
-      cell: (x) => <span style={{ display: "inline-block", width: "1.2em", height: "0.82em", borderRadius: 2, background: flagOf(x.car.country), boxShadow: "inset 0 0 0 1px rgba(0,0,0,.35)" }} />,
+      cell: (x) => <FlagSwatch country={x.car.country} />,
     });
   cols.push({
     id: "name", w: "minmax(6em,2fr)", head: "DRIVER", align: "l",
     cell: (x) => (
-      <span style={{ display: "flex", alignItems: "center", gap: "0.45em", overflow: "hidden" }}>
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: x.isPlayer ? "#fff" : t.text }}>
+      <span style={{ display: "flex", alignItems: "center", gap: "0.45em", overflow: "hidden", height: "1.9em", minWidth: 0, lineHeight: 1 }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, lineHeight: 1, color: x.isPlayer ? "#fff" : t.text }}>
           {x.car.driverName ?? `Car ${x.car.carIdx}`}
         </span>
         {x.car.onPitRoad === true && <PitBadge color={t.amber} />}
@@ -431,6 +487,19 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
   cols.push({ id: "gap", w: "minmax(2.9em,1fr)", head: "GAP", align: "r", cell: (x) => (x.isFirst ? numCell("—", t.text) : x.gapToLeader == null ? numCell("--", t.textDim2) : numCell(fmtGap(x.gapToLeader), t.text)) });
   if (config.showInterval) cols.push({ id: "int", w: "minmax(2.7em,1fr)", head: "INT", align: "r", cell: (x) => numCell(x.interval == null ? "—" : fmtGap(x.interval), t.textDim) });
   if (config.showLastLap) cols.push({ id: "last", w: "minmax(4.4em,1fr)", head: "LAST", align: "r", cell: (x) => numCell(fmtLapTime(x.car.lastLapS), t.textDim) });
+  if (has.lapTrend)
+    cols.push({
+      id: "trend",
+      w: "minmax(2.4em,1fr)",
+      head: "Δ",
+      align: "r",
+      cell: (x) => {
+        const d = x.car.lapDeltaVsAvgS;
+        if (d == null) return numCell("--", t.textDim2);
+        const color = d < -0.05 ? t.gain : d > 0.05 ? t.loss : t.textDim;
+        return numCell(fmtDelta(d), color);
+      },
+    });
   if (config.showBest) cols.push({ id: "best", w: "minmax(4.4em,1fr)", head: "BEST", align: "r", cell: (x) => numCell(fmtLapTime(x.car.bestLapS), x.car.bestLapS != null && x.car.bestLapS === fastestBest ? t.best : t.text) });
   if (has.tyre)
     cols.push({
@@ -607,9 +676,32 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
     return <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center", color: t.textDim, fontSize: "0.85em" }}>No field data</div>;
   }
 
+  const showSofBar = !config.multiclass && showSof && fieldSof != null;
+  const contentHeightPx = Math.min(standingsContentHeightPx(groups, rowsByGroup, fontPx, config.multiclass, showSofBar), allocation.h);
+
   return (
-    <div ref={rootRef} style={{ width: "100%", height: "100%", overflow: "hidden", color: t.text, padding: "6px 10px", boxSizing: "border-box", fontSize: "0.92em" }}>
+    <div
+      ref={rootRef}
+      style={{
+        width: "100%",
+        height: contentHeightPx,
+        maxHeight: "100%",
+        overflow: "hidden",
+        color: t.text,
+        padding: "6px 10px",
+        boxSizing: "border-box",
+        fontSize: "0.92em",
+      }}
+    >
       {header}
+      {!config.multiclass && showSofBar && (
+        <div style={{ display: "flex", alignItems: "center", gap: 7, padding: `0 ${PADX}`, margin: "4px 0 2px", height: "1.1em", boxSizing: "content-box" }}>
+          <SofValue value={fieldSof} theme={theme} mono={mono} t={t} />
+          <span style={{ fontFamily: theme.font.label, marginLeft: "auto", fontSize: "0.68em", color: t.text, letterSpacing: "0.06em", fontWeight: 800, fontVariantNumeric: "tabular-nums", opacity: 0.92 }}>
+            {cars.length} CARS
+          </span>
+        </div>
+      )}
       {groups.map((g) => {
         const key = String(g.id ?? "all");
         const rows = rowsByGroup.get(key) ?? [];
@@ -623,6 +715,9 @@ function Standings({ theme, config, caps }: BaseWidgetProps<StandingsConfig>) {
             {config.multiclass && g.name && (
               <div style={{ display: "flex", alignItems: "center", gap: 7, padding: `0 ${PADX}`, margin: "7px 0 3px", height: "1.3em", boxSizing: "content-box" }}>
                 <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.74em", letterSpacing: "0.04em", color: "#0a0b0e", padding: "1px 7px", borderRadius: 5, background: classColorOf(ccol, g.id) }}>{g.name}</span>
+                {showSof && sofByClass.get(g.id ?? null) != null && (
+                  <SofValue value={sofByClass.get(g.id ?? null)!} theme={theme} mono={mono} t={t} />
+                )}
                 <span style={{ fontFamily: theme.font.label, marginLeft: "auto", fontSize: "0.68em", color: t.text, letterSpacing: "0.06em", fontWeight: 800, fontVariantNumeric: "tabular-nums", opacity: 0.92 }}>
                   {g.display.length < g.rows.length ? `${g.display.length} OF ${g.rows.length}` : `${g.rows.length} CARS`}
                 </span>
@@ -688,6 +783,7 @@ export const standingsDef: WidgetDefinition<StandingsConfig> = {
   defaultSize: { w: 660, h: 345 },
   minSize: { w: 320, h: 140 },
   minContentWidth: standingsMinWidth,
+  hugContentHeight: true,
   defaultConfig,
   requiredPaths: ["slow"],
   requiredCapabilities: ["relativeGaps"],

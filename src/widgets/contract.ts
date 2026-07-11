@@ -100,8 +100,10 @@ export interface BaseWidgetProps<C = Record<string, unknown>> {
   config: C;
   /** What the active sim can provide, so widgets can hide unsupported fields. */
   caps: Capabilities | null;
-  /** Box size in px (after resize). Widgets that draw should fill it. */
+  /** Viewport size in px (the chrome box FitContent measures against). */
   size: { w: number; h: number };
+  /** User-resized allocation — can be taller than `size` when the panel hugs content. */
+  allocatedSize?: { w: number; h: number };
 }
 
 export interface WidgetDefinition<C = Record<string, unknown>> {
@@ -142,6 +144,12 @@ export interface WidgetDefinition<C = Record<string, unknown>> {
    * freed space. `defaultSize.h` should equal `contentHeight(defaultConfig)`.
    */
   contentHeight?: (config: C) => number;
+  /**
+   * Panel chrome hugs measured content height instead of always filling the
+   * allocated resize box. For row-budget widgets (Standings) whose visible height
+   * tracks session data; all other widgets fill their box normally.
+   */
+  hugContentHeight?: boolean;
   /**
    * Work-in-progress widget: kept in the registry (so it still renders if placed,
    * and shows up for development in `npm run dev` / `tauri dev`) but hidden from

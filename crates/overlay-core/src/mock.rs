@@ -440,6 +440,7 @@ impl MockConnector {
             },
             session: SessionState {
                 track_name: Some("Watkins Glen International".to_string()),
+                track_length_m: Some(5430.0),
                 track_turns: Some(
                     TRACK_TURNS
                         .iter()
@@ -514,6 +515,7 @@ impl MockConnector {
                 car_idx: Some(PLAYER_IDX),
                 car_name: Some(PLAYER_CAR.to_string()),
                 on_track: Some(true),
+                off_track: Some(false),
                 in_garage: Some(false),
                 // Tie the spotter to the two weaving "near" cars (idx 3 right, 5 left)
                 // so the screen-edge glow lights on the side a car draws alongside,
@@ -523,14 +525,79 @@ impl MockConnector {
                 pit_speed_limit_ms: Some(22.35), // ~80 km/h
                 pit_box_dist_m: None,
                 sector_times_s: Sectors {
-                    s1: Some(t % LAP_SECONDS * 0.33),
-                    s2: if pct > 0.33 { Some(t % LAP_SECONDS * 0.33) } else { None },
-                    s3: if pct > 0.66 { Some(t % LAP_SECONDS * 0.34) } else { None },
+                    s1: if pct > 0.3 {
+                        Some(LAP_SECONDS * 0.33 - 0.18)
+                    } else {
+                        None
+                    },
+                    s2: if pct > 0.62 {
+                        Some(LAP_SECONDS * 0.33 + 0.03)
+                    } else {
+                        None
+                    },
+                    s3: if pct > 0.9 {
+                        Some(LAP_SECONDS * 0.34 + 0.3)
+                    } else {
+                        None
+                    },
                 },
                 sector_best_s: Sectors {
                     s1: Some(LAP_SECONDS * 0.33),
                     s2: Some(LAP_SECONDS * 0.33),
                     s3: Some(LAP_SECONDS * 0.34),
+                },
+                sector_prev_times_s: Sectors {
+                    s1: Some(LAP_SECONDS * 0.33 + 0.05),
+                    s2: Some(LAP_SECONDS * 0.33 + 0.12),
+                    s3: Some(LAP_SECONDS * 0.34 - 0.08),
+                },
+                sector_session_best_s: Sectors {
+                    s1: Some(LAP_SECONDS * 0.33 - 0.1),
+                    s2: Some(LAP_SECONDS * 0.33),
+                    s3: Some(LAP_SECONDS * 0.34 - 0.05),
+                },
+                sector_session_best_prev_s: Sectors {
+                    s1: Some(LAP_SECONDS * 0.33),
+                    s2: None,
+                    s3: Some(LAP_SECONDS * 0.34),
+                },
+                current_sector_idx: Some(if pct < 0.3 {
+                    0
+                } else if pct < 0.62 {
+                    1
+                } else if pct < 0.9 {
+                    2
+                } else {
+                    2
+                }),
+                sector_elapsed_s: if pct < 0.9 {
+                    let start = if pct < 0.3 {
+                        0.0
+                    } else if pct < 0.62 {
+                        0.3
+                    } else {
+                        0.62
+                    };
+                    Some((pct - start) * LAP_SECONDS)
+                } else {
+                    None
+                },
+                sector_progress: if pct < 0.9 {
+                    let (start, end) = if pct < 0.3 {
+                        (0.0, 0.3)
+                    } else if pct < 0.62 {
+                        (0.3, 0.62)
+                    } else {
+                        (0.62, 0.9)
+                    };
+                    Some(((pct - start) / (end - start)).clamp(0.0, 1.0))
+                } else {
+                    None
+                },
+                sector_live_delta_s: if pct < 0.9 {
+                    Some(-0.05 + 0.12 * (t * 0.8).sin())
+                } else {
+                    None
                 },
                 brake_bias_pct: Some(0.56),
                 abs_active: Some(brake > 0.8),
@@ -545,6 +612,17 @@ impl MockConnector {
                     lr_kpa: Some(122.0),
                     rr_kpa: Some(124.0),
                 },
+                sector_ghost_best_s: Sectors {
+                    s1: Some(LAP_SECONDS * 0.33 - 0.2),
+                    s2: Some(LAP_SECONDS * 0.33 - 0.1),
+                    s3: Some(LAP_SECONDS * 0.34 - 0.15),
+                },
+                incidents: Some(4),
+                incident_limit: Some(17),
+                // BMW M4 GT3 EVO shift-light thresholds (from iRacing session YAML).
+                driver_car_redline: Some(8000.0),
+                driver_car_sl_shift_rpm: Some(7300.0),
+                driver_car_sl_blink_rpm: Some(7900.0),
             },
             cars: self.build_field(t),
         }
@@ -590,6 +668,7 @@ impl MockConnector {
                     tyre: Some(c.tyre.to_string()),
                     position: Some(c.base_pos),
                     class_position: Some(class_position(c.class_id, c.base_pos)),
+                    position_provisional: false,
                     lap: Some(self.lap),
                     lap_dist_pct: Some(((t / LAP_SECONDS) + gap / LAP_SECONDS).rem_euclid(1.0)),
                     gap_to_player_s: Some(gap),
@@ -605,6 +684,8 @@ impl MockConnector {
                     rel_lon_m,
                     pit_status: Some(0),
                     has_session_fastest: Some(c.idx == 0),
+                    rolling_lap_avg_s: Some(c.best + 0.5),
+                    lap_delta_vs_avg_s: Some(0.1 * (t * 0.15 + c.idx as f32).sin()),
                 }
             })
             .collect()

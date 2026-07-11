@@ -9,7 +9,7 @@
 //
 // Pipeline per track:
 //   1. fetch the ACTIVE layer SVG   -> the track centerline path `d`
-//   2. fetch the START/FINISH SVG   -> a representative S/F point (centroid)
+//   2. fetch the START/FINISH SVG   -> geometric intersection with centerline
 //   3. fetch the TURNS layer (opt)  -> Turn 1 position, to infer direction
 //   4. sample N points evenly by arc length along the centerline
 //   5. rotate so the point nearest S/F becomes index 0  (=> array order == lapDistPct)
@@ -30,12 +30,19 @@
 
 import { svgPathProperties } from "svg-path-properties";
 import { cleanTurns } from "./clean-track-turns.mjs";
+import { BROKEN_TRACK_IDS, brokenTrackReason } from "./broken-tracks.mjs";
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const SAMPLES = 400;
+const MIN_SAMPLES = 400;
+const MAX_SAMPLES = 2000;
+
+/** Scale sample count with path length (SVG units). */
+function sampleCount(totalLen) {
+  return Math.max(MIN_SAMPLES, Math.min(MAX_SAMPLES, Math.round(totalLen / 5)));
+}
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..");
 const CACHE_DIR = join(HERE, ".track-map-cache");
@@ -119,10 +126,8 @@ function longestPath(svg) {
   return best;
 }
 
-// A representative point for the start/finish layer: the centroid of every
-// coordinate we can pull from it (path samples + line / circle anchors). It is
-// in the same SVG coordinate space as the active layer, so the nearest sampled
-// centerline point to this centroid is the real start/finish position.
+// A representative point for the start/finish layer: centroid fallback when
+// no line/path intersection is found.
 function centroidOf(svg) {
   const pts = [];
   for (const d of extractPathDs(svg)) {
@@ -157,6 +162,87 @@ function centroidOf(svg) {
     sy += y;
   }
   return [sx / pts.length, sy / pts.length];
+}
+
+/** @param {[number, number]} a @param {[number, number]} b @param {[number, number]} c @param {[number, number]} d */
+function segmentsIntersect(a, b, c, d) {
+  const det = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
+  if (Math.abs(det) < 1e-9) return null;
+  const t = ((c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])) / det;
+  const u = ((c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])) / det;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+  return [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+}
+
+/** Extract line segments from the S/F SVG layer. */
+function sfLineSegments(svg) {
+  const segs = [];
+  const num = (s) => parseFloat(s);
+  const lineRe =
+    /<line\b[^>]*\bx1\s*=\s*["']([^"']+)["'][^>]*\by1\s*=\s*["']([^"']+)["'][^>]*\bx2\s*=\s*["']([^"']+)["'][^>]*\by2\s*=\s*["']([^"']+)["']/g;
+  let m;
+  while ((m = lineRe.exec(svg))) {
+    segs.push([
+      [num(m[1]), num(m[2])],
+      [num(m[3]), num(m[4])],
+    ]);
+  }
+  for (const d of extractPathDs(svg)) {
+    try {
+      const p = new svgPathProperties(d);
+      const total = p.getTotalLength();
+      if (total < 1) continue;
+      const a = p.getPointAtLength(0);
+      const b = p.getPointAtLength(Math.min(total, 80));
+      segs.push([[a.x, a.y], [b.x, b.y]]);
+    } catch {
+      // skip
+    }
+  }
+  return segs;
+}
+
+/**
+ * Find where the S/F line crosses the centerline path — geometrically precise
+ * vs centroid-of-graphics. Falls back to centroid when no intersection found.
+ */
+function sfPointFromIntersection(sfSvg, centerlineD) {
+  if (!sfSvg || !centerlineD) return null;
+  const segs = sfLineSegments(sfSvg);
+  if (!segs.length) return centroidOf(sfSvg);
+
+  const props = new svgPathProperties(centerlineD);
+  const total = props.getTotalLength();
+  const steps = Math.max(200, Math.round(total / 4));
+  let best = null;
+  let bestD = Infinity;
+
+  for (let i = 0; i < steps; i++) {
+    const p0 = props.getPointAtLength((i / steps) * total);
+    const p1 = props.getPointAtLength(((i + 1) / steps) * total);
+    const a = [p0.x, p0.y];
+    const b = [p1.x, p1.y];
+    for (const [c, d] of segs) {
+      const hit = segmentsIntersect(a, b, c, d);
+      if (hit) {
+        const dx = hit[0] - (c[0] + c[0] + d[0] + d[0]) / 4;
+        const dy = hit[1] - (c[1] + c[1] + d[1] + d[1]) / 4;
+        const dist = dx * dx + dy * dy;
+        if (dist < bestD) {
+          bestD = dist;
+          best = hit;
+        }
+      }
+    }
+  }
+  return best ?? centroidOf(sfSvg);
+}
+
+/** Warn when S/F alignment error exceeds threshold (sector sanity check). */
+function validateSfAlignment(points, sfIdx, threshold = 0.02) {
+  if (!points.length) return { ok: false, error: 1 };
+  const err = sfIdx / points.length;
+  return { ok: err <= threshold, error: err };
 }
 
 // Best-effort Turn 1 position from the turns layer, used only to infer driving
@@ -234,15 +320,20 @@ function bake(raw, override) {
   const { activeD, sfPoint, turn1 } = raw;
   const props = new svgPathProperties(activeD);
   const total = props.getTotalLength();
+  const samples = sampleCount(total);
 
   let pts = [];
-  for (let i = 0; i < SAMPLES; i++) {
-    const p = props.getPointAtLength((i / SAMPLES) * total);
+  for (let i = 0; i < samples; i++) {
+    const p = props.getPointAtLength((i / samples) * total);
     pts.push([p.x, p.y]);
   }
 
   // Rotate so the point nearest the S/F line is index 0 (lapDistPct 0).
   const sfIdx = sfPoint ? nearestIndex(pts, sfPoint) : 0;
+  const align = validateSfAlignment(pts, sfIdx);
+  if (!align.ok) {
+    console.warn(`  S/F alignment error ${(align.error * 100).toFixed(1)}% (>2%) — check geometry`);
+  }
   pts = pts.slice(sfIdx).concat(pts.slice(0, sfIdx));
 
   // Driving direction: explicit override wins. Otherwise infer from Turn 1 — it
@@ -250,7 +341,7 @@ function bake(raw, override) {
   // the lap; if it lands in the second half the SVG path runs backwards.
   let direction = override?.direction;
   if (direction == null && turn1) {
-    direction = nearestIndex(pts, turn1) > SAMPLES / 2 ? -1 : 1;
+    direction = nearestIndex(pts, turn1) > samples / 2 ? -1 : 1;
   }
   if (direction == null) direction = 1;
   // Reverse the order but keep the S/F point pinned at index 0.
@@ -401,7 +492,7 @@ async function fetchRaw(asset) {
   }
   return {
     activeD: activeSvg ? longestPath(activeSvg) : null,
-    sfPoint: sfSvg ? centroidOf(sfSvg) : null,
+    sfPoint: sfSvg && activeSvg ? sfPointFromIntersection(sfSvg, longestPath(activeSvg)) : sfSvg ? centroidOf(sfSvg) : null,
     turn1: turnOnePoint(turnsSvg),
     // Full corner set (label + SVG-space position) for the baked `turns`.
     turns: extractTurns(turnsSvg),
@@ -414,6 +505,26 @@ function writeOut(out) {
   for (const k of keys) ordered[k] = out[k];
   writeFileSync(OUT, JSON.stringify(ordered) + "\n");
   console.log(`Wrote ${keys.length} tracks -> ${OUT}`);
+}
+
+/** Build the JSON entry for one track, marking broken layouts without geometry. */
+function packTrackOutput(idStr, name, config, baked) {
+  const id = Number(idStr);
+  if (BROKEN_TRACK_IDS.has(id)) {
+    return {
+      name,
+      config: config ?? null,
+      broken: true,
+      unsupportedReason: brokenTrackReason(id),
+      points: [],
+    };
+  }
+  return {
+    name,
+    config: config ?? null,
+    points: baked.points,
+    ...(baked.turns?.length ? { turns: baked.turns } : {}),
+  };
 }
 
 async function main() {
@@ -430,13 +541,13 @@ async function main() {
       const cached = readJson(join(CACHE_DIR, f), null);
       if (!cached?.activeD) continue;
       try {
-        const { points, turns } = bake(cached, overrides[String(cached.trackId)]);
-        out[String(cached.trackId)] = {
-          name: cached.name,
-          config: cached.config ?? null,
-          points,
-          ...(turns.length ? { turns } : {}),
-        };
+        const baked = bake(cached, overrides[String(cached.trackId)]);
+        out[String(cached.trackId)] = packTrackOutput(
+          String(cached.trackId),
+          cached.name,
+          cached.config ?? null,
+          baked,
+        );
       } catch (e) {
         console.warn(`  skip ${cached.trackId} ${cached.name}: ${e.message}`);
       }
@@ -461,13 +572,8 @@ async function main() {
       if (!/^\d+$/.test(idStr)) continue; // keys must be numeric iRacing track ids
       const entry = ds[idStr];
       try {
-        const { points, turns } = bakeFromSampled(entry, overrides[idStr]);
-        out[idStr] = {
-          name: entry.name ?? entry.trackName ?? null,
-          config: entry.config ?? null,
-          points,
-          ...(turns.length ? { turns } : {}),
-        };
+        const baked = bakeFromSampled(entry, overrides[idStr]);
+        out[idStr] = packTrackOutput(idStr, entry.name ?? entry.trackName ?? null, entry.config ?? null, baked);
         ok++;
       } catch (e) {
         console.warn(`  skip ${idStr}: ${e.message}`);
@@ -694,13 +800,8 @@ async function processAssets(assets, tracks, overrides, out) {
       continue;
     }
     try {
-      const { points, turns } = bake(raw, overrides[idStr]);
-      out[idStr] = {
-        name: info.name,
-        config: info.config,
-        points,
-        ...(turns.length ? { turns } : {}),
-      };
+      const baked = bake(raw, overrides[idStr]);
+      out[idStr] = packTrackOutput(idStr, info.name, info.config, baked);
       ok++;
     } catch (e) {
       console.warn(`  bake fail ${id} ${info.name}: ${e.message}`);

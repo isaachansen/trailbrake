@@ -13,6 +13,9 @@ use crate::irsdk::var::VarDef;
 use crate::irsdk::{
     DATA_VALID_EVENT_NAME, HEADER_LEN, MEM_MAP_NAME, STATUS_CONNECTED, VAR_HEADER_LEN,
 };
+use crate::lap_history::LapHistoryStore;
+use crate::positions::{self, DriverPosInput};
+use crate::reference_lap::{self, ReferenceLapStore};
 use crate::session::{decode_session_info, parse_min, SessionInfoMin};
 use crate::track_map;
 
@@ -84,6 +87,12 @@ pub struct IRacingConnector {
     last_emitted_tick: Option<i64>,
     /// Whether the one-shot `OVERLAY_DUMP_VARS` diagnostic has already run.
     vars_dumped: bool,
+    /// Reference lap profiles for multiclass gap interpolation.
+    reference_laps: ReferenceLapStore,
+    /// Rolling lap-time history per car (trend / avg columns).
+    lap_history: LapHistoryStore,
+    /// Grid/start position per car for `positions_gained`.
+    start_positions: HashMap<u32, u32>,
 }
 
 /// `true` when a session-identity var changed between two polls. Only a
@@ -106,20 +115,33 @@ struct SectorTimer {
     /// `SessionTime` recorded at the most recent crossing of each boundary,
     /// for the lap currently in progress. `None` until first crossed this lap.
     cross_times: Vec<Option<f64>>,
-    /// Completed sector times for the lap *currently in progress* (s). `None`
-    /// until that sector is finished this lap, and the whole set clears at the
-    /// start/finish line — so the Sector Delta widget fills S1→S2→S3 as you drive
-    /// and resets each lap.
+    /// Completed sector times for the lap *currently in progress* (s).
     cur_lap_times: Vec<Option<f32>>,
-    /// Sector splits of the fastest *complete* lap seen this session — the
-    /// reference the deltas compare against ("vs your best lap").
+    /// Previous lap's sector times — updated immediately on each sector close.
+    prev_lap_times: Vec<Option<f32>>,
+    /// Sector splits of the fastest *complete* lap seen this session.
     best_lap_times: Vec<Option<f32>>,
-    /// Total time of that fastest complete lap (s), for picking the best lap.
+    /// Total time of that fastest complete lap (s).
     best_lap_sum: Option<f32>,
+    /// Per-sector session bests (independent mins), not tied to one lap.
+    session_best_times: Vec<Option<f32>>,
+    /// Prior session-best value when a sector just set a new best (purple delta).
+    prev_session_best_times: Vec<Option<f32>>,
+    /// Index of the sector currently being driven.
+    current_sector_idx: usize,
+    /// SessionTime when the current sector was entered.
+    sector_entry_time: Option<f64>,
+    /// False after teleport / first seed until a real boundary entry.
+    sector_entry_valid: bool,
     /// Previous `LapDistPct`, to detect forward crossings and lap wrap.
     prev_pct: Option<f32>,
     /// Previous `SessionTime`, to detect non-monotonic jumps (restart/replay).
     prev_session_time: Option<f64>,
+    /// Teleport, off-track, incident, or session scrub — do not bank this lap.
+    lap_tainted: bool,
+    /// Bumped on invalidate; a lap may only bank when it started at the current generation.
+    lap_generation: u32,
+    invalidation_generation: u32,
 }
 
 impl SectorTimer {
@@ -133,15 +155,23 @@ impl SectorTimer {
         self.starts = starts.to_vec();
         self.cross_times = vec![None; n];
         self.cur_lap_times = vec![None; n];
+        self.prev_lap_times = vec![None; n];
         self.best_lap_times = vec![None; n];
         self.best_lap_sum = None;
+        self.session_best_times = vec![None; n];
+        self.prev_session_best_times = vec![None; n];
+        self.current_sector_idx = 0;
+        self.sector_entry_time = None;
+        self.sector_entry_valid = false;
         self.prev_pct = None;
         self.prev_session_time = None;
+        self.lap_tainted = false;
+        self.lap_generation = 0;
+        self.invalidation_generation = 0;
     }
 
     /// Reset the in-progress lap (boundary crossings + this lap's splits), keeping
-    /// the banked best lap. Used on a session restart / replay scrub so a partial
-    /// lap across the gap is never counted or shown.
+    /// banked bests / previous lap. Used on session restart / replay scrub.
     fn reset_lap(&mut self) {
         for c in self.cross_times.iter_mut() {
             *c = None;
@@ -149,33 +179,78 @@ impl SectorTimer {
         for t in self.cur_lap_times.iter_mut() {
             *t = None;
         }
+        self.sector_entry_time = None;
+        self.sector_entry_valid = false;
+    }
+
+    /// Soft teleport: invalidate entry and clear only the landed sector's current time.
+    fn soft_teleport(&mut self, pct: f32) {
+        self.sector_entry_valid = false;
+        self.sector_entry_time = None;
+        self.lap_tainted = true;
+        self.invalidation_generation = self.invalidation_generation.wrapping_add(1);
+        let landed = self.sector_index_at(pct);
+        self.current_sector_idx = landed;
+        if let Some(t) = self.cur_lap_times.get_mut(landed) {
+            *t = None;
+        }
+        if let Some(c) = self.cross_times.get_mut(landed) {
+            *c = None;
+        }
+    }
+
+    fn sector_index_at(&self, pct: f32) -> usize {
+        let n = self.starts.len();
+        if n == 0 {
+            return 0;
+        }
+        let mut idx = 0usize;
+        for (i, &b) in self.starts.iter().enumerate() {
+            if b <= pct {
+                idx = i;
+            }
+        }
+        idx
     }
 
     /// Feed one frame. `pct` is `LapDistPct` (0..1), `session_time` is the
     /// monotonic `SessionTime` clock (s). `on_track` gates accumulation.
-    fn update(&mut self, pct: Option<f32>, session_time: Option<f64>, on_track: bool) {
+    /// `off_track` / `incident` taint the current lap's banking.
+    fn update(
+        &mut self,
+        pct: Option<f32>,
+        session_time: Option<f64>,
+        on_track: bool,
+        off_track: bool,
+        incident: bool,
+    ) {
         let n = self.starts.len();
         if n == 0 {
             return;
         }
-        // If we lack live data or the player isn't driving, drop continuity so a
-        // future resume doesn't fabricate a giant sector across the gap.
         let (Some(pct), Some(now)) = (pct, session_time) else {
             self.prev_pct = None;
             self.prev_session_time = None;
+            self.sector_entry_valid = false;
             return;
         };
         if !on_track || !pct.is_finite() || !(0.0..=1.0).contains(&pct) {
             self.prev_pct = None;
             self.prev_session_time = None;
+            self.sector_entry_valid = false;
             return;
         }
-        // Session restart / replay scrub: clock went backwards or jumped. Drop
-        // continuity and the in-progress lap so we don't record bogus splits.
+        if off_track || incident {
+            self.lap_tainted = true;
+            self.invalidation_generation = self.invalidation_generation.wrapping_add(1);
+        }
+        // Session restart / replay scrub: clock went backwards or jumped.
         if let Some(prev_t) = self.prev_session_time {
             if now < prev_t || now - prev_t > 5.0 {
                 self.prev_pct = None;
                 self.prev_session_time = Some(now);
+                self.lap_tainted = true;
+                self.invalidation_generation = self.invalidation_generation.wrapping_add(1);
                 self.reset_lap();
                 return;
             }
@@ -184,35 +259,49 @@ impl SectorTimer {
         let prev_pct = match self.prev_pct {
             Some(p) => p,
             None => {
-                // First frame with continuity; just seed.
                 self.prev_pct = Some(pct);
                 self.prev_session_time = Some(now);
+                self.current_sector_idx = self.sector_index_at(pct);
+                self.sector_entry_valid = false;
                 return;
             }
         };
 
-        // Detect lap wrap (start/finish crossing): pct dropped sharply.
+        let forward_jump = pct - prev_pct;
+        if forward_jump > 0.5 {
+            self.soft_teleport(pct);
+            self.prev_pct = Some(pct);
+            self.prev_session_time = Some(now);
+            return;
+        }
+        if let Some(prev_t) = self.prev_session_time {
+            let dt = now - prev_t;
+            if dt > 0.0 && dt < 1.0 && forward_jump > 0.0 {
+                let speed_pct = forward_jump / dt as f32;
+                if speed_pct > 0.08 {
+                    self.soft_teleport(pct);
+                    self.prev_pct = Some(pct);
+                    self.prev_session_time = Some(now);
+                    return;
+                }
+            }
+        }
+
         let wrapped = pct + 0.5 < prev_pct;
         if wrapped {
-            // Finish the last sector (its end boundary is the 0.0 wrap), bank the
-            // lap if it was timed clean, then start a fresh (empty) lap. The wrap
-            // crossing time becomes sector 0's start.
-            self.record_crossing(0, prev_pct, pct, now, wrapped);
+            self.record_crossing(0, now);
             self.finish_lap();
-            // Clear remaining in-progress times for the new lap, keep sector 0.
             for k in 1..n {
                 self.cross_times[k] = None;
             }
         } else {
-            // Check each boundary for a normal forward crossing this frame.
             for k in 0..n {
                 let b = self.starts[k];
-                // Boundary 0 (== 0.0) is only crossed via lap wrap, handled above.
                 if b <= 0.0 {
                     continue;
                 }
                 if prev_pct < b && pct >= b {
-                    self.record_crossing(k, prev_pct, pct, now, false);
+                    self.record_crossing(k, now);
                 }
             }
         }
@@ -221,36 +310,53 @@ impl SectorTimer {
         self.prev_session_time = Some(now);
     }
 
-    /// Record that boundary `k` was crossed at `now`. If the *previous* sector
-    /// (the one ending at this boundary) has a recorded start, close it out into
-    /// this lap's splits: its time = now − start.
-    fn record_crossing(&mut self, k: usize, _prev_pct: f32, _pct: f32, now: f64, wrapped: bool) {
+    /// Record that boundary `k` was crossed at `now`.
+    fn record_crossing(&mut self, k: usize, now: f64) {
         let n = self.starts.len();
         if n == 0 {
             return;
         }
-        // The sector that ENDS at boundary k is sector (k-1 mod n).
         let ending = (k + n - 1) % n;
         if let Some(start_t) = self.cross_times[ending] {
             let dt = now - start_t;
             if dt > 0.0 && dt < 3600.0 {
-                self.cur_lap_times[ending] = Some(dt as f32);
+                let time = dt as f32;
+                self.cur_lap_times[ending] = Some(time);
+                // Previous-lap display updates immediately on each sector close.
+                if ending < self.prev_lap_times.len() {
+                    self.prev_lap_times[ending] = Some(time);
+                }
+                // Per-sector session best (independent of complete-lap banking).
+                let clean = self.lap_generation == self.invalidation_generation && !self.lap_tainted;
+                if clean {
+                    self.maybe_update_session_best(ending, time);
+                }
             }
         }
-        // This crossing starts sector k.
         self.cross_times[k] = Some(now);
-        // On a lap wrap we've just consumed sector 0's old start above; the new
-        // crossing seeds sector 0's start for the fresh lap (handled by line
-        // above setting cross_times[0]).
-        let _ = wrapped;
+        self.current_sector_idx = k;
+        self.sector_entry_time = Some(now);
+        self.sector_entry_valid = true;
     }
 
-    /// Called at the start/finish crossing. If every sector of the lap that just
-    /// ended was cleanly timed, bank it as the best lap when its total is the
-    /// fastest so far. Always clears this lap's splits so the next lap starts
-    /// empty (the widget resets at the line).
+    fn maybe_update_session_best(&mut self, idx: usize, time: f32) {
+        if idx >= self.session_best_times.len() {
+            return;
+        }
+        let better = self.session_best_times[idx].map_or(true, |b| time < b);
+        if better {
+            self.prev_session_best_times[idx] = self.session_best_times[idx];
+            self.session_best_times[idx] = Some(time);
+        }
+    }
+
+    /// Called at the start/finish crossing. Banks a clean complete lap as best
+    /// when its total is the fastest so far, then clears current-lap splits.
     fn finish_lap(&mut self) {
-        let complete = !self.cur_lap_times.is_empty() && self.cur_lap_times.iter().all(Option::is_some);
+        let lap_clean = self.lap_generation == self.invalidation_generation && !self.lap_tainted;
+        let complete = lap_clean
+            && !self.cur_lap_times.is_empty()
+            && self.cur_lap_times.iter().all(Option::is_some);
         if complete {
             let sum: f32 = self.cur_lap_times.iter().flatten().copied().sum();
             if self.best_lap_sum.map_or(true, |b| sum < b) {
@@ -261,25 +367,117 @@ impl SectorTimer {
         for t in self.cur_lap_times.iter_mut() {
             *t = None;
         }
+        self.lap_tainted = false;
+        self.lap_generation = self.invalidation_generation;
     }
 
-    /// Completed splits for the lap in progress (first 3 sectors) — `None` per
-    /// sector until finished this lap; all `None` right after the line.
+    fn to_sectors(times: &[Option<f32>]) -> Sectors {
+        Sectors {
+            s1: times.first().copied().flatten(),
+            s2: times.get(1).copied().flatten(),
+            s3: times.get(2).copied().flatten(),
+        }
+    }
+
     fn current(&self) -> Sectors {
-        Sectors {
-            s1: self.cur_lap_times.first().copied().flatten(),
-            s2: self.cur_lap_times.get(1).copied().flatten(),
-            s3: self.cur_lap_times.get(2).copied().flatten(),
+        Self::to_sectors(&self.cur_lap_times)
+    }
+
+    fn previous(&self) -> Sectors {
+        Self::to_sectors(&self.prev_lap_times)
+    }
+
+    fn best(&self) -> Sectors {
+        Self::to_sectors(&self.best_lap_times)
+    }
+
+    fn session_best(&self) -> Sectors {
+        Self::to_sectors(&self.session_best_times)
+    }
+
+    fn session_best_prev(&self) -> Sectors {
+        Self::to_sectors(&self.prev_session_best_times)
+    }
+
+    fn current_sector_idx(&self) -> Option<u32> {
+        if self.starts.is_empty() {
+            None
+        } else {
+            Some(self.current_sector_idx as u32)
         }
     }
 
-    /// Splits of the fastest complete lap this session (the delta reference).
-    fn best(&self) -> Sectors {
-        Sectors {
-            s1: self.best_lap_times.first().copied().flatten(),
-            s2: self.best_lap_times.get(1).copied().flatten(),
-            s3: self.best_lap_times.get(2).copied().flatten(),
+    /// Live in-sector delta vs a reference lap profile (negative = ahead).
+    fn live_delta(
+        &self,
+        pct: Option<f32>,
+        session_time: Option<f64>,
+        ref_lap: Option<&reference_lap::ReferenceLap>,
+    ) -> Option<f32> {
+        if !self.sector_entry_valid {
+            return None;
         }
+        let (pct, now, entry, lap) = match (pct, session_time, self.sector_entry_time, ref_lap) {
+            (Some(p), Some(n), Some(e), Some(l)) => (p, n, e, l),
+            _ => return None,
+        };
+        let sector_start = self.starts.get(self.current_sector_idx).copied().unwrap_or(0.0);
+        let t_now = reference_lap::interpolate_at(lap, pct)?;
+        let t_start = reference_lap::interpolate_at(lap, sector_start)?;
+        let ghost_elapsed = t_now - t_start;
+        if !ghost_elapsed.is_finite() {
+            return None;
+        }
+        let player_elapsed = (now - entry) as f32;
+        Some(player_elapsed - ghost_elapsed)
+    }
+
+    /// Seconds spent in the current sector since a valid entry.
+    fn elapsed(&self, session_time: Option<f64>) -> Option<f32> {
+        if !self.sector_entry_valid {
+            return None;
+        }
+        let (now, entry) = match (session_time, self.sector_entry_time) {
+            (Some(n), Some(e)) => (n, e),
+            _ => return None,
+        };
+        let dt = (now - entry) as f32;
+        if dt.is_finite() && (0.0..3600.0).contains(&dt) {
+            Some(dt)
+        } else {
+            None
+        }
+    }
+
+    /// Fraction `0..1` through the current sector by LapDistPct.
+    fn progress(&self, pct: Option<f32>) -> Option<f32> {
+        let pct = pct.filter(|p| p.is_finite() && (0.0..=1.0).contains(p))?;
+        let n = self.starts.len();
+        if n == 0 {
+            return None;
+        }
+        let i = self.current_sector_idx.min(n - 1);
+        let start = self.starts[i];
+        let end = if i + 1 < n {
+            self.starts[i + 1]
+        } else {
+            1.0
+        };
+        let span = end - start;
+        if span <= 1e-6 {
+            return Some(0.0);
+        }
+        Some(((pct - start) / span).clamp(0.0, 1.0))
+    }
+
+    #[cfg(test)]
+    fn lap_is_tainted(&self) -> bool {
+        self.lap_tainted
+    }
+
+    #[cfg(test)]
+    fn entry_valid(&self) -> bool {
+        self.sector_entry_valid
     }
 }
 
@@ -346,6 +544,9 @@ impl IRacingConnector {
             prev_session_unique_id: None,
             last_emitted_tick: None,
             vars_dumped: false,
+            reference_laps: ReferenceLapStore::default(),
+            lap_history: LapHistoryStore::default(),
+            start_positions: HashMap::new(),
         }
     }
 
@@ -359,6 +560,9 @@ impl IRacingConnector {
         self.prev_fuel = None;
         self.prev_flags = 0;
         self.messages.clear();
+        self.reference_laps.reset();
+        self.lap_history.reset();
+        self.start_positions.clear();
     }
 
     /// Compute fuel-per-lap from the history of `(lap, fuel_at_crossing)` pairs.
@@ -535,13 +739,6 @@ fn wrap_gap(delta: f32, lap_len_s: Option<f32>) -> f32 {
     }
 }
 
-/// Signed track-time gap to the player: positive = this car is ahead.
-///
-/// Same-lap neighbours use [`wrap_gap`] on the `CarIdxEstTime` delta so order
-/// stays correct across the start/finish line. When `CarIdxLap` differs, the
-/// lap delta is applied first — folding a raw EstTime delta would treat a car a
-/// lap ahead as nearly behind (or vice versa), which is what makes the relative
-/// board drift from reality during races.
 fn relative_gap(
     car_est: f32,
     player_est: f32,
@@ -556,6 +753,94 @@ fn relative_gap(
         Some(l) => wrap_gap(car_est - player_est, Some(l)),
         None => car_est - player_est,
     }
+}
+
+/// Multiclass-aware signed time gap using class-normalised `CarIdxEstTime`.
+///
+/// The **behind** car (chaser) is the reference ruler; we scale the ahead
+/// car's EstTime into behind-car units before taking the difference, so a
+/// slower-class chaser doesn't see an absurdly large gap to a faster-class
+/// leader.
+///
+/// Algorithm (mirrors irDashies `calculateClassEstimatedDelta`):
+/// - `scaling = behind_class_est / ahead_class_est`
+/// - `ahead_scaled = ahead_est * scaling`
+/// - `delta = ahead_scaled – behind_est` (positive = opponent is ahead)
+/// - wrap when |delta| exceeds half a lap of the behind class
+///
+/// Returns positive when `opponent_is_ahead`, negative otherwise.
+/// Falls back to 90 s for any missing class estimate (irDashies default).
+pub(crate) fn class_est_delta(
+    opponent_est: f32,
+    player_est: f32,
+    opponent_class_est: Option<f32>,
+    player_class_est: Option<f32>,
+    opponent_is_ahead: bool,
+) -> f32 {
+    const FALLBACK: f32 = 90.0;
+
+    let (ahead_est, behind_est, ahead_cl_opt, behind_cl_opt) = if opponent_is_ahead {
+        (opponent_est, player_est, opponent_class_est, player_class_est)
+    } else {
+        (player_est, opponent_est, player_class_est, opponent_class_est)
+    };
+
+    let ahead_cl = ahead_cl_opt
+        .filter(|&v| v.is_finite() && v > 1.0)
+        .unwrap_or(FALLBACK);
+    let behind_cl = behind_cl_opt
+        .filter(|&v| v.is_finite() && v > 1.0)
+        .unwrap_or(FALLBACK);
+
+    let scaling = behind_cl / ahead_cl;
+    let ahead_scaled = ahead_est * scaling;
+    let half_lap = behind_cl / 2.0;
+
+    // raw: positive means ahead-car is further into the lap than behind-car (in behind-car units)
+    let raw = ahead_scaled - behind_est;
+
+    let signed = if opponent_is_ahead {
+        // target ahead → expect positive; wrap if huge negative (ahead lapped behind)
+        if raw < -half_lap {
+            raw + behind_cl
+        } else {
+            raw
+        }
+    } else {
+        // target behind → negate (we want gap from player's POV, negative = behind)
+        let neg = -raw;
+        if neg > half_lap {
+            neg - behind_cl
+        } else {
+            neg
+        }
+    };
+
+    signed
+}
+
+/// Remember each car's grid / first-seen position for gain/loss column.
+fn record_start_position(
+    starts: &mut HashMap<u32, u32>,
+    car_idx: u32,
+    current: Option<u32>,
+    grid: Option<u32>,
+) {
+    if let Some(grid_pos) = grid {
+        starts.entry(car_idx).or_insert(grid_pos);
+    } else if let Some(pos) = current {
+        starts.entry(car_idx).or_insert(pos);
+    }
+}
+
+fn positions_gained_from(
+    starts: &HashMap<u32, u32>,
+    car_idx: u32,
+    current: Option<u32>,
+) -> Option<i32> {
+    let cur = current?;
+    let start = *starts.get(&car_idx)?;
+    Some(start as i32 - cur as i32)
 }
 
 impl SimConnector for IRacingConnector {
@@ -731,6 +1016,9 @@ impl SimConnector for IRacingConnector {
             self.prev_fuel = None;
             self.prev_flags = 0;
             self.messages.clear();
+            self.reference_laps.reset();
+            self.lap_history.reset();
+            self.start_positions.clear();
         }
 
         // iRacing's `Clutch` is 1.0 when fully engaged (pedal up) and 0.0 when
@@ -746,10 +1034,34 @@ impl SimConnector for IRacingConnector {
         let lap_dist_pct = f32_var(vm, buf, "LapDistPct");
         let session_time = f64_var(vm, buf, "SessionTime");
         let on_track = bool_at(vm, buf, "IsOnTrack", 0).unwrap_or(false);
-        self.sector_timer
-            .update(lap_dist_pct, session_time, on_track);
+        let track_surface = i32_var(vm, buf, "TrackSurface");
+        let off_track = track_surface == Some(0);
+        let flags_raw = u32_var(vm, buf, "SessionFlags").unwrap_or(0);
+        let incident = flags_raw & (ir_flags::BLACK | ir_flags::DISQUALIFY | ir_flags::REPAIR) != 0;
+        self.sector_timer.update(
+            lap_dist_pct,
+            session_time,
+            on_track,
+            off_track,
+            incident,
+        );
         let sector_times = self.sector_timer.current();
         let sector_best = self.sector_timer.best();
+        let sector_prev = self.sector_timer.previous();
+        let sector_session_best = self.sector_timer.session_best();
+        let sector_session_best_prev = self.sector_timer.session_best_prev();
+        let current_sector_idx = self.sector_timer.current_sector_idx();
+
+        let track_len_m = self
+            .session_min
+            .track_length_m
+            .or_else(|| {
+                self.session_min
+                    .track_id
+                    .and_then(track_map::metadata_for)
+                    .and_then(|m| m.length.map(|l| l as f32))
+            });
+        self.reference_laps.configure(track_len_m);
 
         // Fuel-per-lap from history: detect lap crossings and record the fuel
         // level at each crossing, then average the recent burn values.
@@ -761,6 +1073,16 @@ impl SimConnector for IRacingConnector {
                         self.fuel_history.remove(0);
                     }
                 }
+                if let Some(pi) = self.session_min.driver_car_idx {
+                    let class_id = self
+                        .session_min
+                        .drivers
+                        .iter()
+                        .find(|d| d.car_idx == pi)
+                        .and_then(|d| d.car_class_id);
+                    self.reference_laps
+                        .bank_with_sectors(pi, class_id, sector_best.clone());
+                }
             }
             self.prev_lap = Some(cur_lap);
         }
@@ -769,7 +1091,6 @@ impl SimConnector for IRacingConnector {
 
         // Flag-change → race-control messages. Uses disjoint field borrows so it
         // can run while `vm` is alive.
-        let flags_raw = u32_var(vm, buf, "SessionFlags").unwrap_or(0);
         Self::on_flags_changed(&mut self.messages, &mut self.prev_flags, flags_raw);
 
         // Distance to the player's own pit stall. iRacing exposes no direct var;
@@ -795,6 +1116,34 @@ impl SimConnector for IRacingConnector {
             }
             _ => None,
         };
+
+        let player_ghost_sectors = self
+            .session_min
+            .driver_car_idx
+            .map(|pi| {
+                let class_id = self
+                    .session_min
+                    .drivers
+                    .iter()
+                    .find(|d| d.car_idx == pi)
+                    .and_then(|d| d.car_class_id);
+                self.reference_laps.ghost_sectors_for(pi, class_id)
+            })
+            .unwrap_or_default();
+
+        let sector_live_delta_s = self.session_min.driver_car_idx.and_then(|pi| {
+            let class_id = self
+                .session_min
+                .drivers
+                .iter()
+                .find(|d| d.car_idx == pi)
+                .and_then(|d| d.car_class_id);
+            let ref_lap = self.reference_laps.reference_for(pi, class_id);
+            self.sector_timer
+                .live_delta(lap_dist_pct, session_time, ref_lap)
+        });
+        let sector_elapsed_s = self.sector_timer.elapsed(session_time);
+        let sector_progress = self.sector_timer.progress(lap_dist_pct);
 
         let player = PlayerState {
             speed_ms: f32_var(vm, buf, "Speed"),
@@ -823,6 +1172,11 @@ impl SimConnector for IRacingConnector {
                 .and_then(|d| d.car_screen_name.clone()),
             // iRacing's `IsOnTrack` is set while driving, clear in the garage.
             on_track: bool_at(vm, buf, "IsOnTrack", 0),
+            // TrackSurface OffTrack (=0). Prefer PlayerTrackSurface, fall back to
+            // the scalar TrackSurface used by the sector timer.
+            off_track: i32_var(vm, buf, "PlayerTrackSurface")
+                .or_else(|| i32_var(vm, buf, "TrackSurface"))
+                .map(|s| s == 0),
             in_garage: bool_at(vm, buf, "IsInGarage", 0),
             // iRacing `CarLeftRight` spotter enum: 2/4/5 = car(s) left, 3/4/6 = right.
             car_left: i32_var(vm, buf, "CarLeftRight").map(|v| matches!(v, 2 | 4 | 5)),
@@ -836,6 +1190,13 @@ impl SimConnector for IRacingConnector {
             // telemetry vars — only the sector boundaries in the session YAML).
             sector_times_s: sector_times,
             sector_best_s: sector_best,
+            sector_prev_times_s: sector_prev,
+            sector_session_best_s: sector_session_best,
+            sector_session_best_prev_s: sector_session_best_prev,
+            current_sector_idx,
+            sector_elapsed_s,
+            sector_progress,
+            sector_live_delta_s,
 
             // In-car settings / statuses. These are car-dependent `dc*` driver
             // controls — present only when the loaded car has the adjustment.
@@ -867,22 +1228,104 @@ impl SimConnector for IRacingConnector {
                 lr_kpa: f32_var(vm, buf, "LRcoldPressure"),
                 rr_kpa: f32_var(vm, buf, "RRcoldPressure"),
             },
+            sector_ghost_best_s: player_ghost_sectors,
+            // Team incident count is what the DQ limit applies to (solo = personal).
+            incidents: i32_var(vm, buf, "PlayerCarTeamIncidentCount")
+                .filter(|&n| n >= 0)
+                .map(|n| n as u32),
+            incident_limit: self.session_min.incident_limit,
+            driver_car_redline: self.session_min.driver_car_redline,
+            driver_car_sl_shift_rpm: self.session_min.driver_car_sl_shift_rpm,
+            driver_car_sl_blink_rpm: self.session_min.driver_car_sl_blink_rpm,
         };
 
+        // Reference-lap sampling + lap-history for every competitor.
+        let session_t = session_time.unwrap_or(0.0);
+        for d in self.session_min.drivers.iter().filter(|d| !d.is_pace_car) {
+            let i = d.car_idx as usize;
+            let pct = f32_at(vm, buf, "CarIdxLapDistPct", i);
+            let car_lap_n = i32_at(vm, buf, "CarIdxLap", i);
+            let on_pit = bool_at(vm, buf, "CarIdxOnPitRoad", i).unwrap_or(false);
+            let on_track_car = i32_at(vm, buf, "CarIdxTrackSurface", i) == Some(3);
+            if let (Some(pct), Some(lap_n)) = (pct, car_lap_n) {
+                self.reference_laps.collect(
+                    d.car_idx,
+                    lap_n,
+                    pct,
+                    session_t,
+                    on_track_car,
+                    on_pit,
+                );
+            }
+            let last = lap_time(f32_at(vm, buf, "CarIdxLastLapTime", i));
+            self.lap_history.update(d.car_idx, car_lap_n, last);
+        }
+
         // Build the field from DriverInfo (parsed on session change) + the live
-        // CarIdx* arrays. Gap is approximated from CarIdxEstTime (time at each
-        // car's track position) relative to the player.
+        // CarIdx* arrays. Prefer reference-lap gaps when a profile exists; fall
+        // back to class-normalised CarIdxEstTime (multiclass-safe).
         let player_idx = self.session_min.driver_car_idx.map(|pi| pi as usize);
         let player_est = player_idx.and_then(|pi| f32_at(vm, buf, "CarIdxEstTime", pi));
         let player_lap = player_idx.and_then(|pi| i32_at(vm, buf, "CarIdxLap", pi));
-        // Lap length (s) for wrapping relative gaps across start/finish: prefer
-        // the YAML estimate, fall back to the player's best / last lap.
+        let player_pct = player_idx.and_then(|pi| f32_at(vm, buf, "CarIdxLapDistPct", pi));
+        let player_class = player_idx.and_then(|pi| {
+            self.session_min
+                .drivers
+                .iter()
+                .find(|d| d.car_idx == pi as u32)
+                .and_then(|d| d.car_class_id)
+        });
+        // Per-driver class estimate for the player — used as the normalisation
+        // denominator when the player is the chasing car.
+        let player_class_est = player_idx.and_then(|pi| {
+            self.session_min
+                .drivers
+                .iter()
+                .find(|d| d.car_idx == pi as u32)
+                .and_then(|d| d.car_class_est_lap_time)
+        });
+        let player_on_pit = player_idx
+            .and_then(|pi| bool_at(vm, buf, "CarIdxOnPitRoad", pi))
+            .unwrap_or(false);
+        // Lap length (s) used only when both pct values are absent (last resort).
         let lap_len_s = self
             .session_min
             .car_est_lap_time
             .filter(|&l| l.is_finite() && l > 1.0)
             .or(player.best_lap_s)
             .or(player.last_lap_s);
+        for d in self.session_min.drivers.iter().filter(|d| !d.is_pace_car) {
+            let i = d.car_idx as usize;
+            let live_pos = position(u32_at(vm, buf, "CarIdxPosition", i));
+            let yaml_pos = session_num
+                .and_then(|sn| self.session_min.session_position(sn, d.car_idx));
+            record_start_position(
+                &mut self.start_positions,
+                d.car_idx,
+                live_pos.or(yaml_pos.map(|(p, _)| p)),
+                yaml_pos.map(|(p, _)| p),
+            );
+        }
+
+        let pos_inputs: Vec<DriverPosInput> = self
+            .session_min
+            .drivers
+            .iter()
+            .filter(|d| !d.is_pace_car)
+            .map(|d| {
+                let i = d.car_idx as usize;
+                DriverPosInput {
+                    car_idx: d.car_idx,
+                    car_number: d.car_number.clone(),
+                    car_class_id: d.car_class_id,
+                    live_position: position(u32_at(vm, buf, "CarIdxPosition", i)),
+                    live_class_position: position(u32_at(vm, buf, "CarIdxClassPosition", i)),
+                }
+            })
+            .collect();
+        let resolved_positions =
+            positions::resolve_field_positions(&pos_inputs, &self.session_min, session_num);
+
         let cars: Vec<overlay_core::CarState> = self
             .session_min
             .drivers
@@ -892,16 +1335,88 @@ impl SimConnector for IRacingConnector {
                 let i = d.car_idx as usize;
                 let est = f32_at(vm, buf, "CarIdxEstTime", i);
                 let car_lap = i32_at(vm, buf, "CarIdxLap", i);
-                let yaml_pos = session_num
-                    .and_then(|sn| self.session_min.session_position(sn, d.car_idx));
-                let gap = match (est, player_est, car_lap, player_lap) {
-                    (Some(e), Some(p), Some(cl), Some(pl)) => {
-                        Some(relative_gap(e, p, cl, pl, lap_len_s))
+                let car_pct = f32_at(vm, buf, "CarIdxLapDistPct", i);
+                let resolved = resolved_positions.get(&d.car_idx).copied();
+                let cur_pos = resolved.and_then(|r| r.position);
+                let class_pos = resolved.and_then(|r| r.class_position);
+                let position_provisional = resolved.map(|r| r.provisional).unwrap_or(false);
+                let positions_gained =
+                    positions_gained_from(&self.start_positions, d.car_idx, cur_pos);
+                let last_lap_s = lap_time(f32_at(vm, buf, "CarIdxLastLapTime", i));
+                let rolling_avg = self.lap_history.rolling_avg_s(d.car_idx);
+                let lap_delta = self
+                    .lap_history
+                    .lap_delta_vs_avg_s(d.car_idx, last_lap_s);
+                // --- multiclass-aware gap to player ---
+                //
+                // irDashies algorithm: the CHASER (physically behind car) is
+                // the reference ruler. Prefer the behind car's own reference
+                // lap for interpolation; fall back to class-normalised
+                // CarIdxEstTime when either car is on pit road or no profile
+                // is available yet.
+                let car_on_pit = bool_at(vm, buf, "CarIdxOnPitRoad", i).unwrap_or(false);
+                let gap = match (car_pct, player_pct) {
+                    (Some(cp), Some(pp)) => {
+                        // Wrap to (−0.5, +0.5]: positive = opponent ahead.
+                        let diff = cp - pp;
+                        let relative_pct = if diff > 0.5 {
+                            diff - 1.0
+                        } else if diff < -0.5 {
+                            diff + 1.0
+                        } else {
+                            diff
+                        };
+                        let opponent_ahead = relative_pct > 0.0;
+
+                        // Behind car = the chaser.
+                        let behind_car_idx = if opponent_ahead {
+                            player_idx.unwrap_or(0) as u32
+                        } else {
+                            d.car_idx
+                        };
+                        let behind_class_id = if opponent_ahead {
+                            player_class
+                        } else {
+                            d.car_class_id
+                        };
+
+                        // Use the behind car's reference lap when neither car
+                        // is on pit road (pit road invalidates EstTime tracking).
+                        let behind_ref = if !car_on_pit && !player_on_pit {
+                            self.reference_laps
+                                .reference_for(behind_car_idx, behind_class_id)
+                        } else {
+                            None
+                        };
+
+                        if let Some(ref_lap) = behind_ref {
+                            // Both positions measured on the chaser's own lap
+                            // profile — correct across classes.
+                            reference_lap::reference_delta(ref_lap, cp, pp)
+                        } else {
+                            // Class-normalised EstTime fallback.
+                            match (est, player_est) {
+                                (Some(opp_e), Some(pl_e)) => Some(class_est_delta(
+                                    opp_e,
+                                    pl_e,
+                                    d.car_class_est_lap_time,
+                                    player_class_est,
+                                    opponent_ahead,
+                                )),
+                                _ => None,
+                            }
+                        }
                     }
-                    (Some(e), Some(p), _, _) => lap_len_s
-                        .map(|l| wrap_gap(e - p, Some(l)))
-                        .or(Some(e - p)),
-                    _ => None,
+                    // No pct data — last-resort lap-aware EstTime wrap.
+                    _ => match (est, player_est, car_lap, player_lap) {
+                        (Some(e), Some(p), Some(cl), Some(pl)) => {
+                            Some(relative_gap(e, p, cl, pl, lap_len_s))
+                        }
+                        (Some(e), Some(p), _, _) => lap_len_s
+                            .map(|l| wrap_gap(e - p, Some(l)))
+                            .or(Some(e - p)),
+                        _ => None,
+                    },
                 };
                 overlay_core::CarState {
                     car_idx: d.car_idx,
@@ -912,37 +1427,34 @@ impl SimConnector for IRacingConnector {
                     class_color: d.class_color,
                     car_number: d.car_number.clone(),
                     country: d.country.clone(),
-                    positions_gained: None, // TODO: derive from start position
-                    irating_delta: None,    // not exposed live
-                    tyre: None,             // iRacing doesn't expose compound letter per car
-                    position: position(u32_at(vm, buf, "CarIdxPosition", i))
-                        .or(yaml_pos.map(|(p, _)| p)),
-                    class_position: position(u32_at(vm, buf, "CarIdxClassPosition", i))
-                        .or(yaml_pos.map(|(_, cp)| cp)),
-                    lap: i32_at(vm, buf, "CarIdxLap", i),
-                    lap_dist_pct: f32_at(vm, buf, "CarIdxLapDistPct", i),
+                    positions_gained,
+                    irating_delta: None, // not exposed live by iRacing SDK
+                    tyre: None,          // iRacing doesn't expose compound letter per car
+                    position: cur_pos,
+                    class_position: class_pos,
+                    position_provisional,
+                    lap: car_lap,
+                    lap_dist_pct: car_pct,
                     gap_to_player_s: gap,
-                    last_lap_s: lap_time(f32_at(vm, buf, "CarIdxLastLapTime", i)),
+                    last_lap_s,
                     best_lap_s: lap_time(f32_at(vm, buf, "CarIdxBestLapTime", i)),
                     on_pit_road: bool_at(vm, buf, "CarIdxOnPitRoad", i),
-                    // `CarIdxTrackSurface` is the irsdk_TrackLocation enum:
-                    // -1 = NotInWorld, 0 = OffTrack, 1 = InPitStall,
-                    // 2 = AproachingPits, 3 = OnTrack. Anything >= 0 is loaded
-                    // into the world; -1 means the car is in the garage / not in
-                    // the session, so the Relative widget can drop it.
                     in_world: i32_at(vm, buf, "CarIdxTrackSurface", i).map(|s| s >= 0),
                     irating: d.irating,
                     safety_rating: d.license.clone(),
-                    rel_lat_m: None, // not exposed by the iRacing SDK
+                    rel_lat_m: None,
                     rel_lon_m: None,
                     pit_status: u32_at(vm, buf, "CarIdxPitStopStatus", i),
-                    has_session_fastest: None, // not directly exposed per car
+                    has_session_fastest: None,
+                    rolling_lap_avg_s: rolling_avg,
+                    lap_delta_vs_avg_s: lap_delta,
                 }
             })
             .collect();
 
         let session = SessionState {
             track_name: self.session_min.track_name.clone(),
+            track_length_m: self.session_min.track_length_m,
             // Selected by the live `SessionNum` var so the reported type
             // tracks the weekend as it advances Practice→Qualy→Race (audit
             // B1), instead of always reporting the first parsed session.
@@ -1062,6 +1574,63 @@ mod tests {
         assert!((g + 20.0).abs() < 1e-3, "expected ~-20s, got {g}");
     }
 
+    // --- class_est_delta: multiclass gap normalisation ---
+
+    /// Same class (both 90 s): delta should equal the raw EstTime difference
+    /// with wrap, matching the old wrap_gap / relative_gap behaviour.
+    #[test]
+    fn class_est_delta_same_class_ahead() {
+        // Opponent at 60% (est 54 s), player at 40% (est 36 s) — opponent ahead.
+        let g = class_est_delta(54.0, 36.0, Some(90.0), Some(90.0), true);
+        assert!((g - 18.0).abs() < 1e-3, "expected +18 s, got {g}");
+    }
+
+    #[test]
+    fn class_est_delta_same_class_behind() {
+        // Opponent at 40% (est 36 s), player at 60% (est 54 s) — opponent behind.
+        let g = class_est_delta(36.0, 54.0, Some(90.0), Some(90.0), false);
+        assert!((g + 18.0).abs() < 1e-3, "expected -18 s, got {g}");
+    }
+
+    /// GTP (60 s class, car at 80%) behind GT3 (90 s class, player at 10%).
+    /// Relative pct = 0.8 – 0.1 = 0.7, wrapped = –0.3 → opponent behind.
+    /// GTP needs ~0.2 laps in GTP terms = 12 s to close to GT3; then GT3 is
+    /// 10% in = 6 s more → total 18 GTP-seconds behind.
+    #[test]
+    fn class_est_delta_gtp_behind_gt3_across_start_finish() {
+        // opponent = GTP at 80% → est = 0.8 * 60 = 48 s
+        // player   = GT3 at 10% → est = 0.1 * 90 = 9 s
+        let g = class_est_delta(48.0, 9.0, Some(60.0), Some(90.0), false);
+        // behind = GTP (60 s), ahead = GT3 (90 s)
+        // scaling = 60 / 90 = 0.667; ahead_scaled = 9 * 0.667 = 6.0 s
+        // raw = 6.0 – 48.0 = –42.0; neg = 42.0; 42 > 30 (half 60) → 42 – 60 = –18.0
+        assert!((g + 18.0).abs() < 1e-2, "expected –18 s, got {g}");
+    }
+
+    /// GTP ahead of GT3: GTP at 80%, GT3 (player) at 60%.
+    /// relative pct = +0.2 → opponent ahead.
+    /// In GT3 units: GTP 80% ≈ 72 GT3-s, GT3 at 60% = 54 GT3-s → gap = 18 s.
+    #[test]
+    fn class_est_delta_gtp_ahead_of_gt3() {
+        // opponent = GTP at 80% → est = 48 s; player = GT3 at 60% → est = 54 s
+        let g = class_est_delta(48.0, 54.0, Some(60.0), Some(90.0), true);
+        // behind = GT3 player (90 s), ahead = GTP (60 s)
+        // scaling = 90 / 60 = 1.5; ahead_scaled = 48 * 1.5 = 72 s
+        // raw = 72 – 54 = 18; 18 > –45 → no wrap → 18.0
+        assert!((g - 18.0).abs() < 1e-2, "expected +18 s, got {g}");
+    }
+
+    /// Fallback to 90 s when class estimates are absent — still wraps correctly.
+    #[test]
+    fn class_est_delta_fallback_when_class_est_missing() {
+        // Opponent just crossed S/F (est ~0 s), player still near lap end (est ~88 s).
+        // relative pct wrapped → opponent just ahead; with same 90 s fallback
+        // we expect ~+2 s (symmetric with wrap_gap test).
+        let g = class_est_delta(0.0, 88.0, None, None, true);
+        // scaling = 90/90 = 1; ahead_scaled = 0; raw = 0 – 88 = –88; –88 < –45 → –88 + 90 = 2
+        assert!((g - 2.0).abs() < 1e-2, "expected +2 s, got {g}");
+    }
+
     // 3-sector track: boundaries at 0.0, 0.3, 0.6.
     fn timer3() -> SectorTimer {
         let mut t = SectorTimer::default();
@@ -1083,7 +1652,7 @@ mod tests {
                 p -= 1.0;
             }
             let now = t0 + dur * (frac as f64);
-            t.update(Some(p), Some(now), true);
+            t.update(Some(p), Some(now), true, false, false);
         }
         t0 + dur
     }
@@ -1093,7 +1662,7 @@ mod tests {
     #[test]
     fn fills_progressively_and_resets() {
         let mut t = timer3();
-        t.update(Some(0.95), Some(0.0), true); // seed continuity
+        t.update(Some(0.95), Some(0.0), true, false, false); // seed continuity
         // Cross the line to start a fresh, empty lap.
         let mut now = sweep(&mut t, 0.95, 0.05, 0.0, 5.0);
         let cur = t.current();
@@ -1124,7 +1693,7 @@ mod tests {
     #[test]
     fn best_is_fastest_complete_lap() {
         let mut t = timer3();
-        t.update(Some(0.95), Some(0.0), true);
+        t.update(Some(0.95), Some(0.0), true, false, false);
         // Lap A: S1≈30 (total the slower of the two timed laps).
         let mut now = sweep(&mut t, 0.95, 0.05, 0.0, 5.0); // start lap A
         now = sweep(&mut t, 0.05, 0.31, now, 30.0); // S1 ≈ 30
@@ -1148,21 +1717,124 @@ mod tests {
     fn empty_sectors_yields_none() {
         let mut t = SectorTimer::default();
         t.set_starts(&[]);
-        t.update(Some(0.5), Some(1.0), true);
+        t.update(Some(0.5), Some(1.0), true, false, false);
         assert!(t.current().s1.is_none());
         assert!(t.best().s1.is_none());
+    }
+
+    /// A forward LapDistPct teleport must soft-invalidate (taint + clear landed
+    /// sector) without banking a bogus best lap.
+    #[test]
+    fn teleport_invalidates_lap_banking() {
+        let mut t = timer3();
+        t.update(Some(0.10), Some(1.0), true, false, false);
+        t.update(Some(0.40), Some(31.0), true, false, false);
+        let best_before = t.best().s1;
+        t.update(Some(0.88), Some(32.0), true, false, false);
+        assert!(t.lap_is_tainted(), "teleport must taint lap");
+        assert!(!t.entry_valid(), "teleport clears sector entry validity");
+        t.update(Some(0.65), Some(62.0), true, false, false);
+        t.update(Some(0.04), Some(92.0), true, false, false);
+        assert_eq!(t.best().s1, best_before);
+    }
+
+    /// Previous-lap times update as soon as a sector closes (not only at S/F).
+    #[test]
+    fn previous_lap_fills_on_sector_close() {
+        let mut t = timer3();
+        t.update(Some(0.95), Some(0.0), true, false, false);
+        let mut now = sweep(&mut t, 0.95, 0.05, 0.0, 5.0);
+        now = sweep(&mut t, 0.05, 0.31, now, 30.0);
+        assert!(t.previous().s1.is_some(), "prev S1 set when S1 closes");
+        assert!(t.previous().s2.is_none());
+        now = sweep(&mut t, 0.31, 0.61, now, 30.0);
+        assert!(t.previous().s2.is_some());
+        sweep(&mut t, 0.61, 0.05, now, 30.0);
+        assert!(t.previous().s3.is_some());
+        // After S/F, current is clear but previous still holds the last lap.
+        assert!(t.current().s1.is_none());
+        assert!(t.previous().s1.is_some() && t.previous().s2.is_some() && t.previous().s3.is_some());
+    }
+
+    /// Per-sector session best updates independently; prev holds the old best.
+    #[test]
+    fn session_best_per_sector_and_prev() {
+        let mut t = timer3();
+        t.update(Some(0.95), Some(0.0), true, false, false);
+        let mut now = sweep(&mut t, 0.95, 0.05, 0.0, 5.0);
+        now = sweep(&mut t, 0.05, 0.31, now, 30.0); // S1 ≈ 30
+        assert!((t.session_best().s1.unwrap() - 30.0).abs() < 3.0);
+        assert!(t.session_best_prev().s1.is_none());
+        now = sweep(&mut t, 0.31, 0.61, now, 30.0);
+        now = sweep(&mut t, 0.61, 0.05, now, 30.0);
+        // Faster S1 on next lap.
+        now = sweep(&mut t, 0.05, 0.31, now, 20.0); // S1 ≈ 20
+        assert!((t.session_best().s1.unwrap() - 20.0).abs() < 3.0);
+        assert!((t.session_best_prev().s1.unwrap() - 30.0).abs() < 3.0);
+        let _ = now;
+    }
+
+    /// Live delta is negative when the player is ahead of the reference profile.
+    #[test]
+    fn live_delta_ahead_is_negative() {
+        let mut t = timer3();
+        // Enter S1 cleanly via S/F wrap so entry is valid.
+        t.update(Some(0.95), Some(0.0), true, false, false);
+        let now = sweep(&mut t, 0.95, 0.05, 0.0, 5.0);
+        assert!(t.entry_valid());
+        // Reference: 30s flat across the lap (linear in pct).
+        let ref_lap = reference_lap::ReferenceLap {
+            point_pos: vec![0.0, 0.5, 1.0],
+            times: vec![0.0, 15.0, 30.0],
+            interval: 0.5,
+            points_count: 3,
+            start_time: 0.0,
+            finish_time: 30.0,
+            is_clean: true,
+            sector_times: Sectors::default(),
+        };
+        // At pct=0.15 ghost elapsed ≈ 4.5s. Entry was mid-sweep (~2.5s into the
+        // 5s wrap), so session_time = now (5.0) means ~2.5s player elapsed → ahead.
+        let delta = t.live_delta(Some(0.15), Some(now), Some(&ref_lap));
+        assert!(delta.is_some());
+        assert!(
+            delta.unwrap() < -1.0,
+            "ahead of ref should be negative, got {delta:?}"
+        );
+        // Same position much later → behind.
+        let behind = t.live_delta(Some(0.15), Some(now + 10.0), Some(&ref_lap));
+        assert!(
+            behind.unwrap() > 0.0,
+            "behind ref should be positive, got {behind:?}"
+        );
+    }
+
+    /// Elapsed + progress support live delta vs a fixed sector split.
+    #[test]
+    fn elapsed_and_progress_for_split_delta() {
+        let mut t = timer3();
+        t.update(Some(0.95), Some(0.0), true, false, false);
+        let now = sweep(&mut t, 0.95, 0.05, 0.0, 5.0);
+        // Mid-S1 (starts at 0.0, next at 0.3) → progress 0.5 at pct=0.15.
+        let prog = t.progress(Some(0.15)).unwrap();
+        assert!((prog - 0.5).abs() < 0.02, "progress={prog}");
+        let elapsed = t.elapsed(Some(now + 10.0)).unwrap();
+        assert!(elapsed > 5.0, "elapsed={elapsed}");
+        // vs a 20s S1 split at halfway: expected 10s; player has more → behind.
+        let live = elapsed - 20.0 * prog;
+        assert!(live > 0.0, "should be behind split pace, live={live}");
     }
 
     /// A SessionTime jump (restart/replay scrub) must not fabricate splits.
     #[test]
     fn session_time_jump_resets_lap() {
         let mut t = timer3();
-        t.update(Some(0.95), Some(0.0), true);
+        t.update(Some(0.95), Some(0.0), true, false, false);
         // Smoothly start sector 0 around session time ~5s.
         let now = sweep(&mut t, 0.95, 0.05, 0.0, 5.0);
         // Big forward jump (restart) before crossing 0.3 — drops the lap.
-        t.update(Some(0.10), Some(now + 1000.0), true);
-        t.update(Some(0.31), Some(now + 1015.0), true);
+        t.update(Some(0.10), Some(now + 1000.0), true, false, false);
+        t.update(Some(0.31), Some(now + 1015.0), true, false, false);
         // s1 should NOT be ~1000s; the jump dropped the in-progress start.
         match t.current().s1 {
             Some(v) => assert!(v < 200.0, "stale split leaked: {v}"),
@@ -1174,10 +1846,10 @@ mod tests {
     #[test]
     fn off_track_drops_continuity() {
         let mut t = timer3();
-        t.update(Some(0.40), Some(0.0), true);
-        t.update(Some(0.41), Some(0.016), true);
+        t.update(Some(0.40), Some(0.0), true, false, false);
+        t.update(Some(0.41), Some(0.016), true, false, false);
         // Goes to garage; on_track=false drops continuity.
-        t.update(Some(0.42), Some(0.032), false);
+        t.update(Some(0.42), Some(0.032), false, false, false);
         assert!(t.prev_pct.is_none());
     }
 

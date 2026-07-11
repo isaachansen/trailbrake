@@ -48,6 +48,12 @@ export interface CarEntry {
   carClassName: string | null;
   position: number | null;
   classPosition: number | null;
+  /**
+   * True when position/classPosition were derived (grid, qualify, car-number
+   * order) rather than live sim standings. Set by the iRacing connector; other
+   * sims leave this false/undefined.
+   */
+  positionProvisional?: boolean;
   lap: number | null;
   lapDistPct: number | null;
   /** Signed gap to the player in seconds (positive = ahead on track-time). */
@@ -87,6 +93,10 @@ export interface CarEntry {
   pitStatus: number | null;
   /** True when this car holds the session fastest lap. */
   hasSessionFastest: boolean | null;
+  /** Median-filtered rolling average of recent lap times (s). */
+  rollingLapAvgS: number | null;
+  /** Last lap minus rolling average (negative = faster than recent form). */
+  lapDeltaVsAvgS: number | null;
 }
 
 /** One race-control message (flag change, penalty, info, warning). */
@@ -133,6 +143,10 @@ export interface TrackTurnMarker {
   name: string;
   /** Position as a fraction 0..1 of lap distance. */
   marker: number;
+  /** Section start fraction (Lovely turn range), when available. */
+  start?: number | null;
+  /** Section end fraction (Lovely turn range), when available. */
+  end?: number | null;
 }
 
 /** Supplementary track metadata from lovely-track-data. */
@@ -147,11 +161,15 @@ export interface TrackMetadata {
   sectors: TrackSector[];
   /** Corner names from lovely-track-data, each with a marker (lap fraction). */
   lovelyTurns: TrackTurnMarker[];
+  /** When set, the track map cannot render this layout reliably. */
+  unsupportedReason?: string | null;
 }
 
 export interface SlowSample {
   sim: string;
   trackName: string | null;
+  /** Track length in meters (for deriving opponent pace from lapDistPct). */
+  trackLengthM: number | null;
   sessionType: string | null;
   timeRemainingS: number | null;
   lapsRemaining: number | null;
@@ -181,6 +199,8 @@ export interface SlowSample {
    * sim doesn't distinguish — widgets gate on garage/track only when known.
    */
   onTrack: boolean | null;
+  /** True when player TrackSurface is OffTrack. Rejoin gates on this. */
+  offTrack: boolean | null;
   /** Whether the player is in the garage (vs out of car). `null` if unknown. */
   inGarage: boolean | null;
   /** Spotter: a car is alongside on the left / right (iRacing `CarLeftRight`). */
@@ -232,6 +252,22 @@ export interface SlowSample {
   // Sector times.
   sectorTimesS: Sectors;
   sectorBestS: Sectors;
+  /** Previous lap's sector splits (updated as each sector closes). */
+  sectorPrevTimesS: Sectors;
+  /** Per-sector session bests (independent mins). */
+  sectorSessionBestS: Sectors;
+  /** Prior session-best when a sector just improved (purple delta). */
+  sectorSessionBestPrevS: Sectors;
+  /** Index of the sector currently being driven. */
+  currentSectorIdx: number | null;
+  /** Elapsed time in the current sector (s). */
+  sectorElapsedS: number | null;
+  /** Progress through the current sector 0..1 by track distance. */
+  sectorProgress: number | null;
+  /** Live in-sector delta vs reference-lap profile (negative = ahead). Ghost mode. */
+  sectorLiveDeltaS: number | null;
+  /** Reference-lap ghost sector splits for comparison. */
+  sectorGhostBestS: Sectors;
 
   // In-car setup / statuses.
   brakeBiasPct: number | null;
@@ -246,6 +282,19 @@ export interface SlowSample {
   /** Push-to-pass status. */
   p2pAvailable: number | null;
   tirePressures: TirePressures;
+
+  /** Player team incident points (iRacing). `null` when the sim doesn't expose them. */
+  incidents: number | null;
+  /** Session DQ incident threshold. `null` = unlimited / unknown. */
+  incidentLimit: number | null;
+
+  // iRacing shift-light SDK fields (session YAML, DriverInfo).
+  /** Mechanical redline RPM (`DriverInfo.DriverCarRedLine`). Gauge max; blink fallback. */
+  driverCarRedline: number | null;
+  /** Shift-indicator shift point (`DriverInfo.DriverCarSLShiftRPM`). */
+  driverCarSlShiftRpm: number | null;
+  /** Shift-indicator blink point (`DriverInfo.DriverCarSLBlinkRPM`). */
+  driverCarSlBlinkRpm: number | null;
 }
 
 export interface Capabilities {

@@ -1,31 +1,59 @@
 import type { CarEntry } from "../store/types";
 
-/** iRating-seeded positions used before the sim publishes live standings. */
+/**
+ * Last-resort UI ranks when the connector left a car's positions null
+ * (non-iRacing, or a partial field). Invents iRating order only for cars that
+ * still have both sides empty, using ranks that do not collide with connector
+ * values — inventing on top of a full live field is what created duplicate chips.
+ */
 export function buildProvisionalPositions(cars: CarEntry[]) {
-  const rated = cars.filter((c) => c.irating != null);
   const provPos = new Map<number, number>();
-  [...rated]
-    .sort((a, b) => (b.irating ?? 0) - (a.irating ?? 0))
-    .forEach((c, i) => provPos.set(c.carIdx, i + 1));
   const provClassPos = new Map<number, number>();
-  const byClass = new Map<number, CarEntry[]>();
-  for (const c of rated) {
-    const k = c.carClassId ?? 0;
-    let g = byClass.get(k);
-    if (!g) {
-      g = [];
-      byClass.set(k, g);
+
+  const need = cars.filter(
+    (c) => c.position == null && c.classPosition == null && c.irating != null,
+  );
+  if (need.length === 0) return { provPos, provClassPos };
+
+  const usedOverall = new Set<number>();
+  const usedClass = new Map<number, Set<number>>();
+  for (const c of cars) {
+    if (c.position != null) usedOverall.add(c.position);
+    if (c.classPosition != null) {
+      const k = c.carClassId ?? 0;
+      let set = usedClass.get(k);
+      if (!set) {
+        set = new Set();
+        usedClass.set(k, set);
+      }
+      set.add(c.classPosition);
     }
-    g.push(c);
   }
-  for (const g of byClass.values()) {
-    g.sort((a, b) => (b.irating ?? 0) - (a.irating ?? 0));
-    g.forEach((c, i) => provClassPos.set(c.carIdx, i + 1));
+
+  const byIr = [...need].sort((a, b) => (b.irating ?? 0) - (a.irating ?? 0));
+  let nextOverall = 1;
+  for (const c of byIr) {
+    while (usedOverall.has(nextOverall)) nextOverall += 1;
+    provPos.set(c.carIdx, nextOverall);
+    usedOverall.add(nextOverall);
+    nextOverall += 1;
+
+    const k = c.carClassId ?? 0;
+    let set = usedClass.get(k);
+    if (!set) {
+      set = new Set();
+      usedClass.set(k, set);
+    }
+    let nextClass = 1;
+    while (set.has(nextClass)) nextClass += 1;
+    provClassPos.set(c.carIdx, nextClass);
+    set.add(nextClass);
   }
+
   return { provPos, provClassPos };
 }
 
-/** Sort key for standings rows — real sim position first, then provisional. */
+/** Sort key for standings rows — connector position first, then UI fallback. */
 export function standingSortKey(
   c: CarEntry,
   multiclass: boolean,
@@ -48,22 +76,34 @@ export function standingPosOf(
   provPos: Map<number, number>,
   provClassPos: Map<number, number>,
 ): { pos: number | null; provisional: boolean } {
-  const real = multiclass ? (c.classPosition ?? c.position) : (c.position ?? c.classPosition);
-  if (real != null) return { pos: real, provisional: false };
+  // Prefer the dedicated field so we don't cross-fall into the other namespace
+  // (that was the live-class-27 vs fallback-overall-27 duplicate).
+  const real = multiclass ? c.classPosition : c.position;
+  if (real != null) {
+    return { pos: real, provisional: !!c.positionProvisional };
+  }
+  const fallback = multiclass ? c.position : c.classPosition;
+  if (fallback != null) {
+    return { pos: fallback, provisional: !!c.positionProvisional };
+  }
   const prov = multiclass
     ? (provClassPos.get(c.carIdx) ?? provPos.get(c.carIdx) ?? null)
     : (provPos.get(c.carIdx) ?? null);
   return { pos: prov, provisional: prov != null };
 }
 
-/** Relative widget: class-first, then overall, then provisional. */
+/** Relative widget: class first, then overall, then UI fallback. */
 export function relativePosOf(
   c: CarEntry,
   provPos: Map<number, number>,
   provClassPos: Map<number, number>,
 ): { pos: number | null; provisional: boolean } {
-  const real = c.classPosition ?? c.position;
-  if (real != null) return { pos: real, provisional: false };
+  if (c.classPosition != null) {
+    return { pos: c.classPosition, provisional: !!c.positionProvisional };
+  }
+  if (c.position != null) {
+    return { pos: c.position, provisional: !!c.positionProvisional };
+  }
   const prov = provClassPos.get(c.carIdx) ?? provPos.get(c.carIdx) ?? null;
   return { pos: prov, provisional: prov != null };
 }

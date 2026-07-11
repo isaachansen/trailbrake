@@ -1,162 +1,249 @@
-import { useRef } from "react";
+import { useRef, useSyncExternalStore } from "react";
 import { useSlow } from "../store/hooks";
+import { useStoreInstance } from "../store/storeContext";
+import { useScreenLayer } from "../components/screenLayer";
+import { editModeStore } from "../store/editMode";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface SlowCarAheadConfig {
-  /** Only warn about cars within this time gap ahead (seconds). */
-  gapThresholdS: number;
+  /** Maximum distance ahead (m) to warn about a slow car. */
+  maxDistanceM: number;
+  /** Derived opponent speed (m/s) below which they count as a slow-car hazard (~50 km/h). */
+  slowSpeedThresholdMs: number;
+  /** Derived opponent speed (m/s) at or below which they count as stopped (~5 km/h). */
+  stoppedSpeedThresholdMs: number;
   barThickness: number;
 }
 
 const defaultConfig: SlowCarAheadConfig = {
-  gapThresholdS: 5,
+  maxDistanceM: 250,
+  slowSpeedThresholdMs: 13.9, // ~50 km/h — matches irDashies default
+  stoppedSpeedThresholdMs: 1.4, // ~5 km/h — matches irDashies default
   barThickness: 8,
 };
 
-/**
- * Effective threshold in seconds, migrating layouts saved before the switch
- * from a fabricated meters threshold (`distanceThresholdM`, assumed 42 m/s)
- * to an honest time gap.
- */
-function gapThresholdS(config: SlowCarAheadConfig): number {
-  if (typeof config.gapThresholdS === "number") return config.gapThresholdS;
-  const legacyM = (config as unknown as Record<string, unknown>).distanceThresholdM;
-  if (typeof legacyM === "number") return Math.round((legacyM / 42) * 2) / 2; // nearest 0.5 s
-  return defaultConfig.gapThresholdS;
-}
+const SPEED_AVG_WINDOW = 5;
 
-/**
- * How long (ms) since the last observed motion before a car is considered
- * "stopped". Using a sustained window prevents a single no-op render
- * (duplicate telemetry tick, React StrictMode double-invoke, etc.) from
- * incorrectly latching the "stopped" state.
- */
-const MOTION_WINDOW_MS = 700;
-
-/** ΔlapDistPct per ms below which we do NOT count as motion. */
-const MOTION_EPSILON_PCT_PER_MS = 0.0001 / 100; // ≈ 0.00000 1 pct/ms
-
-interface CarSample {
-  pct: number;
-  /** performance.now() when pct was recorded */
-  t: number;
-  /** performance.now() of the last render in which forward motion was detected */
-  lastMotionT: number;
+interface SpeedEntry {
+  prevPct: number;
+  /** performance.now() at prevPct capture (ms). SessionTime is not on SlowSample,
+   *  so wall-clock is used. Accuracy degrades if the process is throttled between ticks. */
+  prevNowMs: number;
+  /** Moving-average history in m/s, up to SPEED_AVG_WINDOW samples. */
+  history: number[];
 }
 
 function SlowCarAhead({ theme, config }: BaseWidgetProps<SlowCarAheadConfig>) {
   const t = theme.colors;
   const slow = useSlow();
+  const store = useStoreInstance();
+  const editing = useSyncExternalStore(editModeStore.subscribe, editModeStore.get);
+  const { preview } = useScreenLayer();
+
+  // Speed estimates derived from ΔlapDistPct × trackLength / Δwall-clock-time (5-sample MA).
+  const speedBuffer = useRef<Map<number, SpeedEntry>>(new Map());
+
+  const trackLen = slow?.trackLengthM ?? null;
   const playerIdx = slow?.playerCarIdx ?? null;
-  const thresholdS = gapThresholdS(config);
+  const playerSpeedMs = store.latestFast?.speedMs ?? null;
 
-  // Keyed by carIdx. Persists across renders via ref (never triggers re-render).
-  const samples = useRef<Map<number, CarSample>>(new Map());
+  const maxDist = config.maxDistanceM ?? defaultConfig.maxDistanceM;
+  const slowThreshMs = config.slowSpeedThresholdMs ?? defaultConfig.slowSpeedThresholdMs;
+  const stoppedThreshMs = config.stoppedSpeedThresholdMs ?? defaultConfig.stoppedSpeedThresholdMs;
 
-  let nearest: { gap: number; onPitRoad: boolean; moving: boolean; name: string } | null = null;
-
-  const now = performance.now();
+  const nowMs = performance.now();
   const seenIdxs = new Set<number>();
 
-  for (const c of slow?.cars ?? []) {
-    if (c.isPlayer || c.carIdx === playerIdx) continue;
-    // Skip garaged cars (not in world): real iRacing reports lapDistPct === -1
-    // for these, so without this guard a stationary garaged car could be picked
-    // as the "nearest, stopped" car ahead.
-    if (c.inWorld === false || c.lapDistPct == null || c.lapDistPct < 0) continue;
-    const gap = c.gapToPlayerS;
-    if (gap == null || gap <= 0) continue;
+  let nearest: { distanceM: number; name: string; isStopped: boolean } | null = null;
 
-    if (gap > thresholdS) continue;
+  // trackLengthM is required — without it we cannot derive speeds or distances.
+  const hasTrack = trackLen != null && trackLen > 100;
 
-    seenIdxs.add(c.carIdx);
+  if (hasTrack && playerIdx != null && playerSpeedMs != null) {
+    const playerCar = slow!.cars.find((c) => c.carIdx === playerIdx);
+    const playerPct = playerCar?.lapDistPct ?? null;
 
-    const curPct = c.lapDistPct ?? 0;
-    const prev = samples.current.get(c.carIdx);
+    for (const c of slow!.cars) {
+      if (c.carIdx === playerIdx) continue;
+      if (c.inWorld === false) continue;
+      if (c.lapDistPct == null || c.lapDistPct < 0) continue;
+      if (c.onPitRoad === true) continue;
 
-    let lastMotionT: number;
+      seenIdxs.add(c.carIdx);
 
-    if (prev == null) {
-      // First time we see this car — assume moving until we have evidence otherwise.
-      lastMotionT = now;
-    } else {
-      const dt = now - prev.t;
-      if (dt > 0) {
-        // Handle lap wrap: 0.99 → 0.01 is forward motion (~0.02 pct), not a
-        // backwards jump of 0.98. Always take the smaller absolute delta.
-        let dPct = curPct - prev.pct;
-        if (dPct < -0.5) dPct += 1.0; // wrapped forward past start/finish
-        if (dPct > 0.5) dPct -= 1.0;  // would be huge backward jump — clamp
+      // Derive speed from ΔlapDistPct × trackLength / Δt (moving average)
+      const entry = speedBuffer.current.get(c.carIdx);
+      let avgSpeedMs = 0;
 
-        const velocity = dPct / dt; // pct per ms (positive = forward)
-        if (velocity > MOTION_EPSILON_PCT_PER_MS) {
-          lastMotionT = now;
+      if (entry != null) {
+        const dtMs = nowMs - entry.prevNowMs;
+        if (dtMs >= 50) {
+          let dPct = c.lapDistPct - entry.prevPct;
+          if (dPct < -0.5) dPct += 1.0; // lap crossover
+          // Backwards movement (off-track, incident) treated as 0 for this sample
+          const sample = dPct >= 0 ? (dPct * trackLen) / (dtMs / 1000) : 0;
+          const next = [...entry.history, sample].slice(-SPEED_AVG_WINDOW);
+          speedBuffer.current.set(c.carIdx, { prevPct: c.lapDistPct, prevNowMs: nowMs, history: next });
+          avgSpeedMs = next.reduce((a, b) => a + b, 0) / next.length;
         } else {
-          // No meaningful forward motion this render; preserve the previous
-          // lastMotionT so the window can expire naturally.
-          lastMotionT = prev.lastMotionT;
+          // Not enough time elapsed — use last-known average
+          avgSpeedMs =
+            entry.history.length > 0 ? entry.history.reduce((a, b) => a + b, 0) / entry.history.length : 0;
         }
       } else {
-        // dt == 0 (same timestamp) — treat as no new information.
-        lastMotionT = prev.lastMotionT;
+        // First sample seen for this car — record baseline, no speed estimate yet
+        speedBuffer.current.set(c.carIdx, { prevPct: c.lapDistPct, prevNowMs: nowMs, history: [] });
+        continue;
+      }
+
+      // Gate 1: opponent must be below slow threshold
+      if (avgSpeedMs > slowThreshMs) continue;
+
+      // Gate 2: opponent must be slower than player by at least slowThreshMs margin
+      // (irDashies: speed + threshold > playerSpeed → skip)
+      if (avgSpeedMs + slowThreshMs > playerSpeedMs) continue;
+
+      // Gate 3: opponent must be ahead of player (positive wrapped distance)
+      if (playerPct == null) continue;
+      let relPct = c.lapDistPct - playerPct;
+      if (relPct > 0.5) relPct -= 1.0;
+      else if (relPct < -0.5) relPct += 1.0;
+      const distM = relPct * trackLen;
+      if (distM <= 0) continue;
+
+      // Gate 4: must be within maxDistanceM
+      if (distM > maxDist) continue;
+
+      if (nearest == null || distM < nearest.distanceM) {
+        nearest = {
+          distanceM: distM,
+          name: c.driverName ?? c.carNumber ?? `#${c.carIdx}`,
+          isStopped: avgSpeedMs <= stoppedThreshMs,
+        };
       }
     }
-
-    samples.current.set(c.carIdx, { pct: curPct, t: now, lastMotionT });
-
-    // Moving = had forward motion within the last MOTION_WINDOW_MS.
-    const moving = now - lastMotionT < MOTION_WINDOW_MS;
-
-    if (nearest == null || gap < nearest.gap) {
-      nearest = {
-        gap,
-        onPitRoad: c.onPitRoad ?? false,
-        moving,
-        name: c.driverName ?? c.carNumber ?? `#${c.carIdx}`,
-      };
-    }
   }
 
-  // Purge stale entries so the Map doesn't grow across session resets or when
-  // cars drop off track. Only keep cars that were candidates this tick.
-  for (const key of samples.current.keys()) {
-    if (!seenIdxs.has(key)) {
-      samples.current.delete(key);
-    }
+  // Evict cars that are no longer in the session
+  for (const key of speedBuffer.current.keys()) {
+    if (!seenIdxs.has(key)) speedBuffer.current.delete(key);
   }
 
-  if (!nearest) {
-    return (
-      <div style={{ fontFamily: theme.font.label, width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: t.textDim2, fontWeight: 600, fontSize: "0.7em", letterSpacing: "0.1em" }}>
-        NO SLOW CARS AHEAD
-      </div>
-    );
-  }
+  const forceShow = editing || preview;
+  if (!nearest && !forceShow) return null;
 
-  const frac = Math.max(0, Math.min(1, 1 - nearest.gap / thresholdS));
-  // Pit-road cars are informational, not a hazard — neutral/dim, never green.
-  const color = nearest.onPitRoad ? t.textDim : nearest.moving ? t.amber : t.loss;
-
-  // Bar thickness is configured in px but rendered in em (÷14 ≈ base font) so it
-  // scales with the widget's effective font scale instead of staying fixed.
+  const selfPanel = !editing && !preview;
+  const frac = nearest ? Math.max(0, Math.min(1, 1 - nearest.distanceM / maxDist)) : 0.6;
+  const color = t.loss;
   const barEm = config.barThickness / 14;
 
   return (
-    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", justifyContent: "center", gap: "0.5em", padding: "0 1.1em", boxSizing: "border-box", color: t.text }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "0.5em" }}>
-        {/* This is an alert-class widget — when it's visible there's a hazard
-            in front of the driver, so the header must never read as subtle
-            chrome. Full text color (weight backed off slightly so it doesn't
-            outshine the gap number next to it). */}
-        <span style={{ fontFamily: theme.font.label, fontWeight: 600, fontSize: "0.6em", letterSpacing: "0.12em", color: t.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>SLOW CAR AHEAD</span>
-        <span style={{ fontFamily: theme.font.mono, fontWeight: 700, fontSize: "1.4em", color, flexShrink: 0 }}>{nearest.gap.toFixed(1)}<span style={{ fontSize: "0.5em", color: t.textDim }}>s</span></span>
-      </div>
-      <div style={{ height: `${barEm}em`, borderRadius: `${barEm / 2}em`, background: "rgba(255,255,255,0.07)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.10)", overflow: "hidden" }}>
-        <div style={{ height: "100%", width: `${frac * 100}%`, background: color, borderRadius: `${barEm / 2}em`, transition: "width 0.15s linear" }} />
-      </div>
-      <div style={{ fontWeight: 500, fontSize: "0.72em", color: nearest.onPitRoad ? t.textDim : color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        {nearest.onPitRoad ? "IN PITS" : nearest.moving ? "ON TRACK" : "STOPPED"} · {nearest.name}
-      </div>
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        gap: "0.5em",
+        padding: theme.widgetPad,
+        boxSizing: "border-box",
+        color: t.text,
+        ...(selfPanel
+          ? {
+              background: t.surface,
+              border: `1px solid ${t.surfaceBorder}`,
+              borderRadius: theme.radius,
+              backdropFilter: theme.panelBlur,
+              WebkitBackdropFilter: theme.panelBlur,
+              boxShadow: theme.panelShadow,
+            }
+          : null),
+      }}
+    >
+      {nearest ? (
+        <>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              gap: "0.5em",
+            }}
+          >
+            <span
+              style={{
+                fontFamily: theme.font.label,
+                fontWeight: 600,
+                fontSize: "0.6em",
+                letterSpacing: "0.12em",
+                color: t.text,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              SLOW CAR AHEAD
+            </span>
+            <span
+              style={{
+                fontFamily: theme.font.mono,
+                fontWeight: 700,
+                fontSize: "1.4em",
+                color,
+                flexShrink: 0,
+              }}
+            >
+              {Math.round(nearest.distanceM)}
+              <span style={{ fontSize: "0.5em", color: t.textDim }}>m</span>
+            </span>
+          </div>
+          <div
+            style={{
+              height: `${barEm}em`,
+              borderRadius: `${barEm / 2}em`,
+              background: "rgba(255,255,255,0.07)",
+              boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.10)",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                height: "100%",
+                width: `${frac * 100}%`,
+                background: color,
+                borderRadius: `${barEm / 2}em`,
+                transition: "width 0.15s linear",
+              }}
+            />
+          </div>
+          <div
+            style={{
+              fontWeight: 500,
+              fontSize: "0.72em",
+              color,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {nearest.isStopped ? "STOPPED" : "SLOW"} · {nearest.name}
+          </div>
+        </>
+      ) : (
+        <div
+          style={{
+            fontFamily: theme.font.label,
+            textAlign: "center",
+            color: t.textDim2,
+            fontWeight: 600,
+            fontSize: "0.7em",
+            letterSpacing: "0.1em",
+          }}
+        >
+          SLOW CAR AHEAD
+        </div>
+      )}
     </div>
   );
 }
@@ -167,11 +254,28 @@ export const slowCarAheadDef: WidgetDefinition<SlowCarAheadConfig> = {
   defaultSize: { w: 280, h: 100 },
   minSize: { w: 200, h: 70 },
   defaultConfig,
-  requiredPaths: ["slow"],
-  requiredCapabilities: ["relativeGaps"],
+  requiredPaths: ["slow", "fast"],
+  requiredCapabilities: [],
   configSchema: [
-    { key: "gapThresholdS", label: "Range (s)", type: "number", min: 1, max: 12, step: 0.5 },
+    { key: "maxDistanceM", label: "Range (m)", type: "number", min: 50, max: 500, step: 10 },
+    {
+      key: "slowSpeedThresholdMs",
+      label: "Slow below (m/s)",
+      type: "number",
+      min: 3,
+      max: 30,
+      step: 0.5,
+    },
+    {
+      key: "stoppedSpeedThresholdMs",
+      label: "Stopped below (m/s)",
+      type: "number",
+      min: 0.5,
+      max: 5,
+      step: 0.5,
+    },
     { key: "barThickness", label: "Bar (px)", type: "number", min: 4, max: 20, step: 1 },
   ],
+  transparentPanel: () => true,
   Component: SlowCarAhead,
 };

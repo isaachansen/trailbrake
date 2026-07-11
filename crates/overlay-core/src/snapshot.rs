@@ -62,6 +62,10 @@ pub struct Meta {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SessionState {
     pub track_name: Option<String>,
+    /// Track length in meters (from weekend info). Used to derive opponent
+    /// pace from `lapDistPct` deltas when the sim has no per-car Speed.
+    #[serde(default)]
+    pub track_length_m: Option<f32>,
     /// e.g. "Practice", "Qualify", "Race".
     pub session_type: Option<String>,
     pub time_remaining_s: Option<f64>,
@@ -205,6 +209,9 @@ pub struct TrackMetadata {
     /// ("Variante Tamburello").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lovely_turns: Vec<TrackTurnMarker>,
+    /// When set, the track map widget should show this instead of rendering dots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsupported_reason: Option<String>,
 }
 
 /// A sector boundary marker for track metadata.
@@ -222,6 +229,12 @@ pub struct TrackTurnMarker {
     pub name: String,
     /// Position as a fraction `0.0..=1.0` of lap distance.
     pub marker: f32,
+    /// Section start fraction (Lovely turn range), when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<f32>,
+    /// Section end fraction (Lovely turn range), when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<f32>,
 }
 
 /// The player's own car. Mix of fast path (pedals/rpm/...) and slow path
@@ -263,6 +276,10 @@ pub struct PlayerState {
     /// `None` when the sim doesn't distinguish; widgets that gate on garage/track
     /// only do so when this is known.
     pub on_track: Option<bool>,
+    /// True when the player's `TrackSurface` is OffTrack (iRacing enum 0).
+    /// Distinct from `on_track` (`IsOnTrack` = physics running). Rejoin gates on this.
+    #[serde(default)]
+    pub off_track: Option<bool>,
     /// Whether the player is in the garage. Combined with `on_track` this lets
     /// widgets distinguish in-car / out-of-car / in-garage session states.
     pub in_garage: Option<bool>,
@@ -282,9 +299,31 @@ pub struct PlayerState {
     /// Current-lap sector split times. `None` per sector until crossed.
     #[serde(default)]
     pub sector_times_s: Sectors,
-    /// Best-lap sector split times.
+    /// Best-lap sector split times (fastest complete lap).
     #[serde(default)]
     pub sector_best_s: Sectors,
+    /// Previous lap's sector splits (updated as each sector closes).
+    #[serde(default)]
+    pub sector_prev_times_s: Sectors,
+    /// Per-sector session bests (independent mins).
+    #[serde(default)]
+    pub sector_session_best_s: Sectors,
+    /// Prior session-best when a sector just improved (for purple delta).
+    #[serde(default)]
+    pub sector_session_best_prev_s: Sectors,
+    /// Index of the sector currently being driven (`0..n`).
+    #[serde(default)]
+    pub current_sector_idx: Option<u32>,
+    /// Elapsed time in the current sector (s). `None` when entry is invalid.
+    #[serde(default)]
+    pub sector_elapsed_s: Option<f32>,
+    /// Progress through the current sector `0..1` by track distance.
+    #[serde(default)]
+    pub sector_progress: Option<f32>,
+    /// Live in-sector delta vs reference-lap *profile* (negative = ahead).
+    /// Prefer this for ghost mode; session/personal use elapsed vs split × progress.
+    #[serde(default)]
+    pub sector_live_delta_s: Option<f32>,
 
     // --- in-car settings / statuses (for the Dash Cluster / setup tools) ---
     /// Brake bias fraction `0.0..=1.0` (front bias).
@@ -311,6 +350,32 @@ pub struct PlayerState {
     /// Tire pressures for the four corners (kPa), for setup comparison.
     #[serde(default)]
     pub tire_pressures: TirePressures,
+    /// Best reference-lap sector splits for ghost comparison (from connector).
+    #[serde(default)]
+    pub sector_ghost_best_s: Sectors,
+
+    /// Player team incident points (iRacing `PlayerCarTeamIncidentCount`).
+    /// `None` when the sim does not expose incidents.
+    #[serde(default)]
+    pub incidents: Option<u32>,
+    /// Session DQ threshold (iRacing `WeekendOptions:IncidentLimit`).
+    /// `None` when unlimited or unknown — widgets show ∞ when `incidents` is set.
+    #[serde(default)]
+    pub incident_limit: Option<u32>,
+
+    // --- iRacing shift-light SDK fields (session YAML, DriverInfo) ---
+    /// Mechanical redline RPM (`DriverInfo:DriverCarRedLine`). Gauge max and
+    /// blink-threshold fallback when no Lovely car profile is matched.
+    #[serde(default)]
+    pub driver_car_redline: Option<f32>,
+    /// Shift-indicator shift point (`DriverInfo:DriverCarSLShiftRPM`) — the
+    /// "upshift now" RPM, just below the blink threshold.
+    #[serde(default)]
+    pub driver_car_sl_shift_rpm: Option<f32>,
+    /// Shift-indicator blink point (`DriverInfo:DriverCarSLBlinkRPM`) — the
+    /// RPM at which the shift-light strip starts flashing.
+    #[serde(default)]
+    pub driver_car_sl_blink_rpm: Option<f32>,
 }
 
 /// One car in the field (including, redundantly, the player — widgets pick).
@@ -341,6 +406,11 @@ pub struct CarState {
     pub tyre: Option<String>,
     pub position: Option<u32>,
     pub class_position: Option<u32>,
+    /// True when `position` / `class_position` were derived (grid, qualify, or
+    /// car-number order) rather than live sim standings. iRacing sets this;
+    /// other sims leave the default `false`.
+    #[serde(default)]
+    pub position_provisional: bool,
     pub lap: Option<i32>,
     pub lap_dist_pct: Option<f32>,
     /// Signed gap to the player in seconds (positive = ahead on track-time).
@@ -372,6 +442,12 @@ pub struct CarState {
     /// True when this car holds the session fastest lap.
     #[serde(default)]
     pub has_session_fastest: Option<bool>,
+    /// Median-filtered rolling average of recent lap times (s).
+    #[serde(default)]
+    pub rolling_lap_avg_s: Option<f32>,
+    /// Last lap minus `rolling_lap_avg_s` (negative = faster than recent form).
+    #[serde(default)]
+    pub lap_delta_vs_avg_s: Option<f32>,
 }
 
 /// A single normalized frame. This is the only shape the frontend ever sees.

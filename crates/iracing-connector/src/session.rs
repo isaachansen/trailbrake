@@ -26,12 +26,18 @@ pub struct DriverEntry {
     pub class_color: Option<u32>,
     pub irating: Option<i32>,
     pub license: Option<String>,
-    /// 2-letter country code (ISO 3166-1 alpha-2), parsed from the driver's
-    /// locale / country field in the YAML when present.
+    /// 2-letter country code (ISO 3166-1 alpha-2), from `LLCountry` / `Country`
+    /// when present, else derived from `FlairID`.
     pub country: Option<String>,
+    /// iRacing flair id — preferred nationality source when Country fields are empty.
+    pub flair_id: Option<u32>,
     /// Position of this driver's pit stall as a fraction `0..1` of lap distance
     /// (`DriverInfo.Drivers[].DriverPitTrkPct`). Used to derive distance-to-box.
     pub pit_trk_pct: Option<f32>,
+    /// Estimated lap time (s) for this car's class (`CarClassEstLapTime` from
+    /// `DriverInfo.Drivers[]`). Used as the reference unit for multiclass gap
+    /// normalisation (the "ruler" is always the chasing car's class estimate).
+    pub car_class_est_lap_time: Option<f32>,
     /// True for the pace/safety car, so the connector can drop it from the field.
     pub is_pace_car: bool,
 }
@@ -68,6 +74,18 @@ pub struct SessionInfoMin {
     /// qualifying completes and when the race grid is formed — fills the gap
     /// before live `CarIdxPosition` is trustworthy.
     pub session_positions: HashMap<(i32, u32), (u32, u32)>,
+    /// DQ incident threshold from `WeekendInfo.WeekendOptions.IncidentLimit`.
+    /// `None` when the weekend is unlimited (or the key is absent / "unlimited").
+    pub incident_limit: Option<u32>,
+    /// Mechanical redline RPM from `DriverInfo:DriverCarRedLine`. Used as gauge
+    /// max and fallback blink threshold when no Lovely car profile matches.
+    pub driver_car_redline: Option<f32>,
+    /// iRacing shift-indicator shift point from `DriverInfo:DriverCarSLShiftRPM`
+    /// (the "shift now" RPM — just below blink).
+    pub driver_car_sl_shift_rpm: Option<f32>,
+    /// iRacing shift-indicator blink point from `DriverInfo:DriverCarSLBlinkRPM`
+    /// (the RPM at which the strip starts flashing).
+    pub driver_car_sl_blink_rpm: Option<f32>,
 }
 
 impl SessionInfoMin {
@@ -166,6 +184,15 @@ fn parse_leading_f32(s: &str) -> Option<f32> {
     t[..end].parse::<f32>().ok().filter(|v| v.is_finite())
 }
 
+/// Parse `WeekendOptions:IncidentLimit` — a positive integer, or `unlimited`.
+fn parse_incident_limit(raw: Option<String>) -> Option<u32> {
+    let s = raw?.trim().to_string();
+    if s.is_empty() || s.eq_ignore_ascii_case("unlimited") {
+        return None;
+    }
+    s.parse().ok().filter(|&n| n > 0)
+}
+
 /// Find the value of the first line whose trimmed content starts with `"{key}:"`.
 fn scan_value(yaml: &str, key: &str) -> Option<String> {
     let needle = format!("{key}:");
@@ -195,6 +222,10 @@ pub fn parse_min(yaml: &str) -> SessionInfoMin {
             .and_then(|s| parse_leading_f32(&s))
             .map(|km| km * 1000.0),
         session_positions: scan_session_positions(yaml),
+        incident_limit: parse_incident_limit(scan_value(yaml, "IncidentLimit")),
+        driver_car_redline: None,
+        driver_car_sl_shift_rpm: None,
+        driver_car_sl_blink_rpm: None,
     };
 
     let lines: Vec<&str> = yaml.lines().collect();
@@ -224,6 +255,24 @@ pub fn parse_min(yaml: &str) -> SessionInfoMin {
 
         if let Some(v) = t.strip_prefix("DriverCarEstLapTime:") {
             info.car_est_lap_time = v.trim().parse().ok().filter(|&l: &f32| l.is_finite() && l > 0.0);
+            i += 1;
+            continue;
+        }
+
+        if let Some(v) = t.strip_prefix("DriverCarRedLine:") {
+            info.driver_car_redline = v.trim().parse().ok().filter(|&r: &f32| r.is_finite() && r > 0.0);
+            i += 1;
+            continue;
+        }
+
+        if let Some(v) = t.strip_prefix("DriverCarSLShiftRPM:") {
+            info.driver_car_sl_shift_rpm = v.trim().parse().ok().filter(|&r: &f32| r.is_finite() && r > 0.0);
+            i += 1;
+            continue;
+        }
+
+        if let Some(v) = t.strip_prefix("DriverCarSLBlinkRPM:") {
+            info.driver_car_sl_blink_rpm = v.trim().parse().ok().filter(|&r: &f32| r.is_finite() && r > 0.0);
             i += 1;
             continue;
         }
@@ -271,22 +320,31 @@ pub fn parse_min(yaml: &str) -> SessionInfoMin {
                 } else if let Some(x) = dt.strip_prefix("CarPath:") {
                     // CarPath often embeds a locale/region; not used directly.
                     let _ = x;
+                } else if let Some(x) = dt.strip_prefix("FlairID:") {
+                    d.flair_id = x.trim().parse().ok().filter(|&id| id > 0);
                 } else if let Some(x) = dt.strip_prefix("LLCountry:") {
-                    // Per-driver locale country (ISO code) in some iRacing builds.
+                    // Per-driver locale country (ISO code) — often empty in live sessions.
                     let c = unquote(x);
                     if !c.is_empty() {
                         d.country = Some(c);
                     }
                 } else if let Some(x) = dt.strip_prefix("Country:") {
-                    // Fallback country field.
+                    // Fallback country field — also often empty now.
                     let c = unquote(x);
                     if !c.is_empty() && d.country.is_none() {
                         d.country = Some(c);
                     }
                 } else if let Some(x) = dt.strip_prefix("DriverPitTrkPct:") {
                     d.pit_trk_pct = x.trim().parse().ok().filter(|p: &f32| p.is_finite());
+                } else if let Some(x) = dt.strip_prefix("CarClassEstLapTime:") {
+                    d.car_class_est_lap_time = x.trim().parse().ok().filter(|&v: &f32| v.is_finite() && v > 0.0);
                 }
                 i += 1;
+            }
+            // Live sessions leave Country/LLCountry blank; FlairID is the
+            // nationality signal iRacing still publishes.
+            if d.country.is_none() {
+                d.country = crate::flair::country_from_flair(d.flair_id);
             }
             info.drivers.push(d);
             continue;
@@ -435,9 +493,18 @@ fn flush_result_entry(
     cur_pos: &mut Option<u32>,
     cur_class: &mut Option<u32>,
 ) {
+    // `Position: 0` means "not ranked yet" (common in early practice) — omit so
+    // the connector can fall through to car-number order instead of shipping a
+    // zero that `sanitizeSlow` later turns into null/`--`.
+    //
+    // YAML `ClassPosition` is 0-based (irDashies / iRacing session string);
+    // live `CarIdxClassPosition` is 1-based. Normalize to 1-based here.
     if let (Some(sn), Some(ci), Some(p)) = (session_num, cur_car.take(), cur_pos.take()) {
-        let cp = cur_class.take().unwrap_or(p);
-        out.insert((sn, ci), (p, cp));
+        let raw_class = cur_class.take();
+        if p > 0 {
+            let cp = raw_class.map(|c| c + 1).unwrap_or(p);
+            out.insert((sn, ci), (p, cp));
+        }
     } else {
         *cur_car = None;
         *cur_pos = None;
@@ -550,6 +617,7 @@ DriverInfo:
    CarScreenName: Ferrari 296 GT3
    CarClassID: 84
    CarClassColor: 0xff5252
+   CarClassEstLapTime: 92.3
    IRating: 4210
    LicString: A 3.99
    LLCountry: FR
@@ -557,6 +625,7 @@ DriverInfo:
    UserName: Jane Doe
    CarClassID: 84
    CarClassColor: 0x42a5f5
+   CarClassEstLapTime: 88.5417
    IRating: 3320
    LicString: B 2.50
    Country: US
@@ -610,6 +679,25 @@ SplitTimeInfo:
     }
 
     #[test]
+    fn parses_car_class_est_lap_time_per_driver() {
+        let info = parse_min(SAMPLE);
+        // Each driver's class estimate is parsed individually.
+        let d0 = &info.drivers[0];
+        assert_eq!(d0.car_idx, 0);
+        assert!((d0.car_class_est_lap_time.unwrap() - 92.3).abs() < 1e-4);
+        let d1 = &info.drivers[1];
+        assert_eq!(d1.car_idx, 2);
+        assert!((d1.car_class_est_lap_time.unwrap() - 88.5417).abs() < 1e-4);
+    }
+
+    #[test]
+    fn car_class_est_lap_time_absent_is_none() {
+        let yaml = "---\nDriverInfo:\n DriverCarIdx: 0\n Drivers:\n - CarIdx: 0\n   UserName: A\n";
+        let info = parse_min(yaml);
+        assert_eq!(info.drivers[0].car_class_est_lap_time, None);
+    }
+
+    #[test]
     fn est_lap_time_absent_is_none() {
         let yaml = "---\nDriverInfo:\n DriverCarIdx: 0\n Drivers:\n - CarIdx: 0\n   UserName: A\n";
         let info = parse_min(yaml);
@@ -640,26 +728,81 @@ SessionInfo:
    SessionType: Lone_Qualify
    ResultsPositions:
    - Position: 1
-     ClassPosition: 1
+     ClassPosition: 0
      CarIdx: 5
    - Position: 2
-     ClassPosition: 2
+     ClassPosition: 1
      CarIdx: 12
  - SessionNum: 2
    SessionType: Race
    ResultsPositions:
    - Position: 1
-     ClassPosition: 1
+     ClassPosition: 0
      CarIdx: 12
    - Position: 2
-     ClassPosition: 2
+     ClassPosition: 1
      CarIdx: 5
 ";
         let info = parse_min(yaml);
+        // ClassPosition is stored 1-based after the 0-based YAML convert.
         assert_eq!(info.session_position(1, 5), Some((1, 1)));
         assert_eq!(info.session_position(1, 12), Some((2, 2)));
         assert_eq!(info.session_position(2, 12), Some((1, 1)));
         assert_eq!(info.session_position(2, 5), Some((2, 2)));
+    }
+
+    #[test]
+    fn skips_zero_results_position() {
+        let yaml = "\
+---
+SessionInfo:
+ Sessions:
+ - SessionNum: 0
+   SessionType: Practice
+   ResultsPositions:
+   - Position: 0
+     ClassPosition: 0
+     CarIdx: 3
+   - Position: 1
+     ClassPosition: 0
+     CarIdx: 5
+";
+        let info = parse_min(yaml);
+        assert_eq!(info.session_position(0, 3), None);
+        assert_eq!(info.session_position(0, 5), Some((1, 1)));
+    }
+
+    #[test]
+    fn parses_incident_limit() {
+        let limited = parse_min(
+            "---\nWeekendInfo:\n WeekendOptions:\n  IncidentLimit: 17\n",
+        );
+        assert_eq!(limited.incident_limit, Some(17));
+        let unlimited = parse_min(
+            "---\nWeekendInfo:\n WeekendOptions:\n  IncidentLimit: unlimited\n",
+        );
+        assert_eq!(unlimited.incident_limit, None);
+    }
+
+    #[test]
+    fn flair_id_fills_country_when_locale_empty() {
+        let yaml = "\
+---
+DriverInfo:
+ DriverCarIdx: 0
+ Drivers:
+ - CarIdx: 0
+   UserName: A
+   FlairID: 71
+ - CarIdx: 1
+   UserName: B
+   FlairID: 223
+   LLCountry: DE
+";
+        let info = parse_min(yaml);
+        assert_eq!(info.drivers[0].flair_id, Some(71));
+        assert_eq!(info.drivers[0].country.as_deref(), Some("FR")); // from flair
+        assert_eq!(info.drivers[1].country.as_deref(), Some("DE")); // LLCountry wins
     }
 
     #[test]
