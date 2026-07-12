@@ -68,8 +68,8 @@ pub fn resolve_field_positions(
         }
     } else {
         for d in drivers {
-            // Session scan already drops Position 0 and 1-bases class; still
-            // guard so a stale/partial entry never blocks car-number fallback.
+            // Session scan 1-bases both positions; still guard so a stale or
+            // manually constructed zero never blocks car-number fallback.
             if let Some((p, c)) = current
                 .get(&d.car_idx)
                 .copied()

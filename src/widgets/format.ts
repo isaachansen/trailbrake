@@ -77,3 +77,31 @@ export function rgbaOf(rgb: number | null | undefined, alpha: number, fallback: 
   const b = rgb & 0xff;
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
+
+/** How driver names render in Relative / Standings. */
+export type DriverNameFormat = "full" | "short";
+
+/**
+ * Format a driver display name.
+ * - `full` → "First Last" (as provided)
+ * - `short` → "F. Last" (first initial + last token)
+ * Single-token names and already-initialed first tokens ("A. Novak") stay sensible.
+ */
+export function formatDriverName(
+  name: string | null | undefined,
+  format: DriverNameFormat,
+  fallback = "—",
+): string {
+  const raw = name?.trim();
+  if (!raw) return fallback;
+  if (format !== "short") return raw;
+
+  const parts = raw.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0];
+
+  const first = parts[0];
+  const last = parts[parts.length - 1];
+  // Already "A." / "A" style — keep that initial, don't double-abbreviate.
+  const initial = /^[A-Za-z]\.?$/.test(first) ? first.replace(/\.$/, "") : first.charAt(0);
+  return `${initial.toUpperCase()}. ${last}`;
+}

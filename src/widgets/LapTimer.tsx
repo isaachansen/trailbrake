@@ -87,10 +87,6 @@ function LapTimer({ theme, config }: BaseWidgetProps<LapTimerConfig>) {
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: theme.widgetPad, boxSizing: "border-box", overflow: "hidden", gap: theme.space.sm }}>
-      <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center" }}>
-        <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.76em", letterSpacing: "0.12em", color: t.textDim }}>LAP TIMER</span>
-      </div>
-
       <div style={{ flex: "1 1 auto", display: "flex", justifyContent: "center", alignItems: "center", minHeight: 0, overflow: "hidden" }}>
         <span ref={curRef} style={{ fontFamily: mono, fontWeight: 700, fontSize: "2.0em", lineHeight: 1, color: t.text, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>--</span>
       </div>

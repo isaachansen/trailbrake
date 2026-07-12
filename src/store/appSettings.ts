@@ -31,7 +31,7 @@ export interface AppSettings {
   monitorIndex: number | null;
   /** Display units across all widgets (speed/fuel/temp). */
   units: UnitSystem;
-  /** Accent color for the manager UI (hex, e.g. "#ff2d8e"). Drives the `--accent`
+  /** Accent color for the manager UI (hex, e.g. "#3d8bff"). Drives the `--accent`
    *  family of CSS variables; persisted so it survives a reopen. */
   accentColor: string;
   /** Fill widgets with synthetic (mock) telemetry while the overlay is shown
@@ -57,7 +57,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoShow: true,
   monitorIndex: null,
   units: "metric",
-  accentColor: "#ff2d8e",
+  accentColor: "#3d8bff",
   previewMock: true,
   panelStyle: "flat",
   vr: { ...DEFAULT_VR_SETTINGS },

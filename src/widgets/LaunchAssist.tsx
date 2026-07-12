@@ -126,7 +126,7 @@ function LaunchAssist({ theme, config }: BaseWidgetProps<LaunchAssistConfig>) {
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: theme.widgetPad, boxSizing: "border-box", color: t.text }}>
-      <WidgetTitle title="Launch Assist" theme={theme} right={<span ref={status} style={statusLabel}>ARMED</span>} />
+      <WidgetTitle theme={theme} right={<span ref={status} style={statusLabel}>ARMED</span>} />
       <div ref={bars} style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "space-evenly", gap: theme.space.md, marginTop: theme.space.sm, transition: "opacity 0.3s" }}>
         <div>
           <div style={labelStyle}>

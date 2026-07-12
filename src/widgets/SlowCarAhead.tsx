@@ -167,24 +167,10 @@ function SlowCarAhead({ theme, config }: BaseWidgetProps<SlowCarAheadConfig>) {
             style={{
               display: "flex",
               alignItems: "baseline",
-              justifyContent: "space-between",
+              justifyContent: "flex-end",
               gap: "0.5em",
             }}
           >
-            <span
-              style={{
-                fontFamily: theme.font.label,
-                fontWeight: 600,
-                fontSize: "0.6em",
-                letterSpacing: "0.12em",
-                color: t.text,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
-              SLOW CAR AHEAD
-            </span>
             <span
               style={{
                 fontFamily: theme.font.mono,
@@ -241,7 +227,7 @@ function SlowCarAhead({ theme, config }: BaseWidgetProps<SlowCarAheadConfig>) {
             letterSpacing: "0.1em",
           }}
         >
-          SLOW CAR AHEAD
+          CLEAR
         </div>
       )}
     </div>

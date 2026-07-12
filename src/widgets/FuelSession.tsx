@@ -9,7 +9,6 @@
 import { useSlow } from "../store/hooks";
 import { useSettings } from "../store/appSettings";
 import { fuelValue, fuelLabel } from "./format";
-import { WidgetTitle } from "./WidgetTitle";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface FuelSessionConfig {
@@ -78,10 +77,6 @@ function FuelSession({ theme, config }: BaseWidgetProps<FuelSessionConfig>) {
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", gap: theme.space.md, color: t.text, padding: theme.widgetPad, boxSizing: "border-box", overflow: "hidden" }}>
-      <div style={{ flex: "0 0 auto" }}>
-        <WidgetTitle title="Fuel & Session" theme={theme} />
-      </div>
-
       {config.showSession && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: theme.space.sm, flex: "1 1 0", minHeight: 0 }}>
           {cell("POSITION", big(slow?.position != null ? `P${slow.position}` : "--", fieldSize ? `/${fieldSize}` : null), t.text)}

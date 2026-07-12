@@ -1,54 +1,37 @@
-import { flagEmoji, flagOf, hasFlagGradient } from "./raceColors";
+import type { CSSProperties } from "react";
+import "flag-icons/css/flag-icons.min.css";
 
-/** Compact nationality swatch for standings / relative rows. */
+const SWATCH: CSSProperties = {
+  display: "block",
+  width: "1.2em",
+  height: "0.82em",
+  borderRadius: 2,
+  boxShadow: "inset 0 0 0 1px rgba(0,0,0,.35)",
+  // Neutralize flag-icons' `:before` nbsp + line-height:1em, which otherwise
+  // makes the box taller than the painted flag and sits it high in the row.
+  lineHeight: 0,
+  overflow: "hidden",
+  backgroundSize: "cover",
+  backgroundPosition: "center",
+  flexShrink: 0,
+};
+
+const EMPTY: CSSProperties = {
+  ...SWATCH,
+  background: "rgba(255,255,255,0.12)",
+  boxShadow: "inset 0 0 0 1px rgba(0,0,0,.35)",
+};
+
+/** Compact nationality swatch for standings / relative rows (flag-icons CSS). */
 export function FlagSwatch({ country }: { country: string | null | undefined }) {
-  const code = country?.toUpperCase() ?? null;
-  if (code && hasFlagGradient(code)) {
-    return (
-      <span
-        title={code}
-        style={{
-          display: "inline-block",
-          width: "1.2em",
-          height: "0.82em",
-          borderRadius: 2,
-          background: flagOf(code),
-          boxShadow: "inset 0 0 0 1px rgba(0,0,0,.35)",
-        }}
-      />
-    );
-  }
-  const emoji = flagEmoji(code);
-  if (emoji) {
-    return (
-      <span
-        title={code ?? undefined}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: "1.2em",
-          height: "0.82em",
-          fontSize: "0.95em",
-          lineHeight: 1,
-          borderRadius: 2,
-          overflow: "hidden",
-        }}
-      >
-        {emoji}
-      </span>
-    );
-  }
+  const code = country?.trim().toLowerCase();
+  if (!code) return <span style={EMPTY} />;
+
   return (
     <span
-      style={{
-        display: "inline-block",
-        width: "1.2em",
-        height: "0.82em",
-        borderRadius: 2,
-        background: "rgba(255,255,255,0.12)",
-        boxShadow: "inset 0 0 0 1px rgba(0,0,0,.35)",
-      }}
+      title={code.toUpperCase()}
+      className={`fi fi-${code}`}
+      style={SWATCH}
     />
   );
 }

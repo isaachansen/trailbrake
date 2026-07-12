@@ -1,6 +1,6 @@
 /* Manager control UI — "Trailbrake v2" design language. Opaque, polished dark
    companion to the overlay: Bricolage Grotesque display + Hanken Grotesk body,
-   ambient pink/green glow on near-black, an icon nav-rail and a topbar. The
+   ambient blue/green glow on near-black, an icon nav-rail and a topbar. The
    overlay itself stays minimal/flat for perf; the manager is richer since it
    never composites over the game. */
 
@@ -25,13 +25,13 @@
   --dim-soft: #aeb4bf;
   --faint: #5f6573;
   /* accent + status */
-  --accent: #ff2d8e;
+  --accent: #3d8bff;
   /* Slightly darker accent for primary-button hover; recomputed per chosen
      accent in accent.ts (accentVars). */
-  --accent-dark: #d12574;
-  --accent-soft: rgba(255, 45, 142, 0.14);
-  --accent-line: rgba(255, 45, 142, 0.42);
-  --accent-glow: rgba(255, 45, 142, 0.16);
+  --accent-dark: #3272d1;
+  --accent-soft: rgba(61, 139, 255, 0.14);
+  --accent-line: rgba(61, 139, 255, 0.42);
+  --accent-glow: rgba(61, 139, 255, 0.16);
   --good: #2fe08a;
   --good-ink: #06140d;
   --good-glow: rgba(47, 224, 138, 0.26);

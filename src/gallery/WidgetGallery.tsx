@@ -59,10 +59,10 @@ function sizeFor(def: WidgetDefinition, mode: string, w?: number, h?: number) {
   return { ...def.defaultSize };
 }
 
-function Inner({ def, config }: { def: WidgetDefinition; config: Record<string, unknown> }) {
+function Inner({ def, config, panelOpacity }: { def: WidgetDefinition; config: Record<string, unknown>; panelOpacity: number }) {
   const caps = useCaps(); // reads the preview store via the provider
   const Comp = def.Component;
-  return <FitContent>{(size) => <Comp theme={theme} config={config} caps={caps} size={size} />}</FitContent>;
+  return <FitContent>{(size) => <Comp theme={theme} config={config} caps={caps} size={size} panelOpacity={panelOpacity} />}</FitContent>;
 }
 
 /** One widget rendered at an explicit pixel size inside the exact overlay panel
@@ -127,7 +127,7 @@ function GalleryPanel({
         <StoreProvider store={previewStoreFor(def.id)}>
           <ScreenLayerContext.Provider value={{ el: layer, preview: true, fullScreen: false }}>
             <div style={{ position: "relative", zIndex: 1, flex: 1, minHeight: 0 }}>
-              <Inner def={def} config={cfg} />
+              <Inner def={def} config={cfg} panelOpacity={panelAlpha} />
             </div>
           </ScreenLayerContext.Provider>
         </StoreProvider>
@@ -164,7 +164,7 @@ function GalleryCard({
         flexDirection: "column",
         gap: 10,
         padding: 14,
-        borderRadius: 14,
+        borderRadius: 8,
         background: "rgba(255,255,255,0.03)",
         border: "1px solid rgba(255,255,255,0.07)",
         overflow: "hidden",

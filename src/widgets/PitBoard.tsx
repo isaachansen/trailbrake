@@ -72,7 +72,6 @@ function PitBoard({ theme, config }: BaseWidgetProps<PitBoardConfig>) {
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: theme.widgetPad, boxSizing: "border-box", overflow: "hidden" }}>
       <div style={{ flex: "0 0 auto", marginBottom: 8 }}>
         <WidgetTitle
-          title="Pit Board"
           theme={theme}
           right={
             <span style={{ fontFamily: theme.font.label, fontWeight: 600, fontSize: "0.6em", letterSpacing: "0.06em", color: onPit ? t.amber : t.textDim2, whiteSpace: "nowrap" }}>
@@ -86,7 +85,7 @@ function PitBoard({ theme, config }: BaseWidgetProps<PitBoardConfig>) {
         const known = fuelToAdd != null;
         const dot = known ? (stopNeeded ? t.amber : t.gain) : t.textDim2;
         return (
-          <div style={{ padding: "7px 13px", borderRadius: 11, background: stopNeeded ? "rgba(255,180,61,0.14)" : t.cell, border: stopNeeded ? `1px solid rgba(255,180,61,0.35)` : `1px solid ${t.surfaceBorder}`, display: "flex", alignItems: "center", gap: 9 }}>
+          <div style={{ padding: "7px 13px", borderRadius: 7, background: stopNeeded ? "rgba(255,180,61,0.14)" : t.cell, border: stopNeeded ? `1px solid rgba(255,180,61,0.35)` : `1px solid ${t.surfaceBorder}`, display: "flex", alignItems: "center", gap: 9 }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: dot, flex: "none" }} />
             <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "1.15em", letterSpacing: "0.03em", color: known ? (stopNeeded ? t.amber : t.gain) : t.text }}>
               {known ? (stopNeeded ? "STOP FOR FUEL" : "FUEL OK") : "AWAITING LAP DATA"}

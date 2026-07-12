@@ -66,7 +66,6 @@ function SetupComparison({ theme, config }: BaseWidgetProps<SetupComparisonConfi
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", gap: 6, padding: theme.widgetPad, boxSizing: "border-box", color: t.text, overflow: "hidden" }}>
       <WidgetTitle
-        title="Setup Comparison"
         theme={theme}
         right={
           <button

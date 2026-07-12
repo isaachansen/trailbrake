@@ -2,23 +2,24 @@
 // flag, license, iRating, tyre and the relative gap. Slow-path widget.
 //
 // Two things make it readable at a glance:
-//  - rows are sorted by relative gap (ahead at top, you in the middle, behind at
-//    the bottom) and filtered to a time window so distant cars drop off;
+//  - a fixed slot grid (N ahead + you + M behind) keeps the player locked in the
+//    middle; missing neighbours leave empty slots so the layout never jumps;
 //  - rows are absolutely positioned by slot and transition their `top`, so when an
 //    overtake changes the order the two cars visibly slide past each other.
 //
-// Above and below the rows sit an optional header / footer info bar: a
-// reorderable, per-session-type-toggleable set of telemetry fields (session,
-// position, lap times, fuel, …) configured from the settings panel.
+// Above and below the rows sit optional header / footer info panels: separate
+// floating chrome (not attached to the driver list), with a gap between sections.
+// Empty header/footer panels are omitted entirely.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSlow } from "../store/hooks";
 import { useSettings } from "../store/appSettings";
-import { fmtGap, fmtLapTime, fmtDelta, hexToRgba, fuelValue, fuelLabel, tempValue, tempLabel, type UnitSystem } from "./format";
+import { fmtGap, fmtLapTime, fmtDelta, fuelValue, fuelLabel, tempValue, tempLabel, formatDriverName, type UnitSystem, type DriverNameFormat } from "./format";
 import { InfoIcon } from "./relativeInfoIcons";
-import { parseLicense, classColorMap, classColorOf } from "./raceColors";
+import { parseLicense } from "./raceColors";
 import { FlagSwatch } from "./FlagSwatch";
 import { LicenseBadge } from "./LicenseBadge";
+import { PosChip } from "./PosChip";
 import { TyreBadge } from "./TyreBadge";
 import { PitBadge } from "./PitBadge";
 import { CarIcon, carIconFor, iracingIcon } from "./carIcons";
@@ -27,12 +28,22 @@ import { buildProvisionalPositions, relativePosOf } from "./provisionalPos";
 import { classifySessionType } from "./contract";
 import type { BaseWidgetProps, InfoFieldConfig, SessionType, WidgetDefinition } from "./contract";
 import type { Theme } from "../theme/theme";
+import { GlassSpecular, panelChrome } from "../components/liquidGlass";
+import {
+  DRIVER_COL_GAP,
+  DRIVER_ROW_H,
+  DRIVER_ROW_PAD_R,
+  DriverListTrough,
+  DriverRowShell,
+  PositionFlash,
+  flashColor,
+} from "./driverList";
 
 export interface RelativeConfig {
+  /** How many cars ahead of the player to show. */
   rowsAhead: number;
+  /** How many cars behind the player to show. */
   rowsBehind: number;
-  /** Hide cars more than this many seconds ahead/behind. */
-  windowSeconds: number;
   /** Multiplier for header/footer info-chip size (independent of row scale). */
   fieldScale: number;
   /** Multiplier for car-row height and typography (independent of field scale). */
@@ -44,6 +55,8 @@ export interface RelativeConfig {
   showCarIcon: boolean;
   /** In qualifying, show only the player (you're on a solo hot lap — no field). */
   soloInQualy: boolean;
+  /** Driver name style: full "First Last" or abbreviated "F. Last". */
+  nameFormat: DriverNameFormat;
   /** Info fields shown above the rows (ordered, per-session-type). */
   header: InfoFieldConfig[];
   /** Info fields shown below the rows (ordered, per-session-type). */
@@ -125,10 +138,9 @@ function buildFieldDefaults(onKeys: string[]): InfoFieldConfig[] {
 }
 
 const defaultConfig: RelativeConfig = {
-  rowsAhead: 4,
-  rowsBehind: 4,
-  windowSeconds: 30,
-  fieldScale: 1,
+  rowsAhead: 3,
+  rowsBehind: 3,
+  fieldScale: 1.15,
   rowScale: 1,
   showFlag: true,
   showLicense: true,
@@ -136,15 +148,17 @@ const defaultConfig: RelativeConfig = {
   showTyre: true,
   showCarIcon: true,
   soloInQualy: true,
+  nameFormat: "full",
   header: buildFieldDefaults(["sessionType", "position", "timeLeft", "incidents"]),
   footer: buildFieldDefaults(["last", "best", "fuel"]),
 };
 
-const ROWH = 2.25; // em — slot height; rows animate their `top` between slots.
+const ROWH = DRIVER_ROW_H; // em — slot height; rows animate their `top` between slots.
 const SLIDE_MS = 180; // position-swap glide — keep under the ~200ms slow tick so rows don't lag live order
-const ENTER_MS = 240; // fade-in when a car enters the visible window
-const EXIT_MS = 240; // fade-out when a car leaves the visible window
-const FLASH_MS = 900; // brief gain/loss tint after a position change
+/** Gap between the disconnected header / main / footer panels (design px). */
+const SECTION_GAP = 8;
+/** InfoBar type size (em) before the user `fieldScale` multiplier. */
+const INFO_BAR_EM = 1.05;
 
 /** The chips to show for one info bar, given the current session category. */
 function visibleChips(entries: InfoFieldConfig[] | undefined, slow: SlowSample | null, cur: SessionType | null, units: UnitSystem) {
@@ -157,11 +171,33 @@ function visibleChips(entries: InfoFieldConfig[] | undefined, slow: SlowSample |
 function InfoBar({ chips, color, dim, mono, scale }: { chips: { def: InfoFieldDef; value: string }[]; color: string; dim: string; mono: string; scale: number }) {
   if (chips.length === 0) return null;
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.45em 0.9em", padding: "0 0.6em", fontSize: `${0.7 * scale}em` }}>
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: "0.55em 1.15em",
+        fontSize: `${INFO_BAR_EM * scale}em`,
+      }}
+    >
       {chips.map(({ def, value }) => (
-        <span key={def.key} title={def.label} style={{ display: "inline-flex", alignItems: "center", gap: "0.42em", whiteSpace: "nowrap" }}>
-          <span style={{ color: dim, display: "inline-flex" }}><InfoIcon name={def.key} /></span>
-          <span style={{ color, fontFamily: mono, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{value}</span>
+        <span key={def.key} title={def.label} style={{ display: "inline-flex", alignItems: "center", gap: "0.5em", whiteSpace: "nowrap" }}>
+          <span style={{ color: dim, display: "inline-flex", opacity: 0.95 }}>
+            <InfoIcon name={def.key} size="1.15em" strokeWidth={2} />
+          </span>
+          <span
+            style={{
+              color,
+              fontFamily: mono,
+              fontWeight: 800,
+              fontSize: "1.08em",
+              letterSpacing: "0.01em",
+              fontVariantNumeric: "tabular-nums",
+              lineHeight: 1,
+            }}
+          >
+            {value}
+          </span>
         </span>
       ))}
     </div>
@@ -239,32 +275,6 @@ function deriveRelativeRows(prev: RelativeRowState[], visibleIdx: Map<number, nu
   return changed ? next : prev;
 }
 
-/** A brief tinted overlay for a row that just gained or lost a position.
- *  Mounts opaque (no transition) so it appears instantly, then flips to
- *  transparent on the next paint so the fade-out plays as a proper CSS
- *  transition — independent of the ~200ms slow-path tick rate. */
-function PositionFlash({ event, color }: { event: HighlightEvent; color: string }) {
-  const [faded, setFaded] = useState(false);
-  useEffect(() => {
-    setFaded(false);
-    const raf = requestAnimationFrame(() => setFaded(true));
-    return () => cancelAnimationFrame(raf);
-  }, [event.id]);
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        borderRadius: 8,
-        pointerEvents: "none",
-        background: color,
-        opacity: faded ? 0 : 1,
-        transition: faded ? `opacity ${FLASH_MS}ms ease-out` : "none",
-      }}
-    />
-  );
-}
-
 interface RelativeRowProps {
   car: CarEntry;
   slot: number;
@@ -278,89 +288,33 @@ interface RelativeRowProps {
   lic: { letter: string; sr: string } | null;
   t: Theme["colors"];
   mono: string;
-  ccol: Map<number, string>;
   has: { flag: boolean; car: boolean; lic: boolean; ir: boolean; tyre: boolean; lapTrend: boolean };
   cols: string;
+  nameFormat: DriverNameFormat;
   highlight: HighlightEvent | null;
   onExited: (carIdx: number) => void;
 }
 
-/** One relative row. Kept as its own component (module scope, so it isn't
- *  re-created every parent render) purely so it can own the tiny bit of local
- *  state an enter fade needs: render invisible on mount, then flip to visible
- *  next paint so the opacity transition actually plays. */
-function RelativeRow({ car, slot, rowH, exiting, isPlayer, pos, provisional, gap, inPit, lic, t, mono, ccol, has, cols, highlight, onExited }: RelativeRowProps) {
-  const [entered, setEntered] = useState(false);
-  useEffect(() => {
-    const raf = requestAnimationFrame(() => setEntered(true));
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
-  const steadyOpacity = inPit && !isPlayer ? 0.7 : 1;
-  const opacity = exiting || !entered ? 0 : steadyOpacity;
-
+/** One relative row — shared DriverRowShell + widget-specific columns. */
+function RelativeRow({ car, slot, rowH, exiting, isPlayer, pos, provisional, gap, inPit, lic, t, mono, has, cols, nameFormat, highlight, onExited }: RelativeRowProps) {
   return (
-    <div
-      onTransitionEnd={(e) => {
-        // Only the opacity leg matters here — `top`/`background` also transition
-        // on this node and would otherwise fire spurious "exit" removals.
-        if (exiting && e.propertyName === "opacity") onExited(car.carIdx);
-      }}
-      style={{
-        position: "absolute",
-        left: 0,
-        right: 0,
-        top: `${slot * rowH}em`,
-        height: `${rowH - 0.2}em`,
-        display: "grid",
-        gridTemplateColumns: cols,
-        alignItems: "center",
-        gap: "1em",
-        padding: "0 0.75em",
-        borderRadius: 8,
-        background: isPlayer ? "rgba(255, 45, 142, 0.32)" : hexToRgba(classColorOf(ccol, car.carClassId), 0.18),
-        boxShadow: isPlayer ? `inset 0 0 0 1.5px ${t.accent}` : "none",
-        color: isPlayer ? "#fff" : t.textDim,
-        fontWeight: isPlayer ? 800 : 500,
-        opacity,
-        // The mover glides past its neighbor on `top`; opacity handles the
-        // enter/exit fade (a shorter duration than the slide so departures feel
-        // brisk rather than draggy).
-        transition: `top ${SLIDE_MS}ms cubic-bezier(.4,0,.2,1), opacity ${exiting ? EXIT_MS : ENTER_MS}ms ease-out, background 0.2s`,
-      }}
+    <DriverRowShell
+      slot={slot}
+      rowH={rowH}
+      isPlayer={isPlayer}
+      exiting={exiting}
+      steadyOpacity={inPit && !isPlayer ? 0.7 : 1}
+      gridTemplateColumns={cols}
+      accent={t.accent}
+      slideMs={SLIDE_MS}
+      onExited={() => onExited(car.carIdx)}
+      style={{ color: isPlayer ? "#fff" : t.textDim }}
     >
-      {highlight && (
-        <PositionFlash event={highlight} color={hexToRgba(highlight.kind === "gain" ? t.gain : t.loss, 0.32)} />
-      )}
+      {highlight && <PositionFlash eventId={highlight.id} color={flashColor(highlight.kind, t)} />}
       {pos == null ? (
         <span style={{ color: t.textDim2 }}>--</span>
       ) : (
-        <span
-          title={provisional ? "Provisional — grid, qualify, or car-number order (no live session position yet)" : undefined}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            minWidth: "1.55em",
-            height: "1.55em",
-            padding: "0 0.25em",
-            borderRadius: 5,
-            // Real position → solid chip; provisional → outlined + dim so it
-            // reads as a seeded estimate, not a live result.
-            background: provisional ? "transparent" : "rgba(0,0,0,0.28)",
-            boxShadow: provisional ? `inset 0 0 0 1px ${hexToRgba("#ffffff", 0.22)}` : "none",
-            fontVariantNumeric: "tabular-nums",
-            fontWeight: isPlayer ? 800 : 700,
-            color: isPlayer ? "#fff" : provisional ? t.textDim : t.text,
-          }}
-        >
-          {pos}
-        </span>
-      )}
-      {has.flag && (
-        <span style={{ justifySelf: "center" }}>
-          <FlagSwatch country={car.country} />
-        </span>
+        <PosChip pos={pos} provisional={provisional} isPlayer={isPlayer} t={t} rowH={rowH} />
       )}
       {has.car && (
         <span style={{ justifySelf: "center", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -370,9 +324,14 @@ function RelativeRow({ car, slot, rowH, exiting, isPlayer, pos, provisional, gap
           })()}
         </span>
       )}
-      <span style={{ display: "flex", alignItems: "center", alignSelf: "stretch", gap: "0.45em", overflow: "hidden", minWidth: 0, marginLeft: has.car ? "0.65em" : undefined, lineHeight: 1 }}>
+      {has.flag && (
+        <span style={{ justifySelf: "center", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <FlagSwatch country={car.country} />
+        </span>
+      )}
+      <span style={{ display: "flex", alignItems: "center", alignSelf: "stretch", gap: "0.75em", overflow: "hidden", minWidth: 0, lineHeight: 1 }}>
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, lineHeight: 1, color: isPlayer ? "#fff" : t.text }}>
-          {car.driverName ?? `Car ${car.carIdx}`}
+          {formatDriverName(car.driverName, nameFormat, `Car ${car.carIdx}`)}
         </span>
         {inPit && <PitBadge color={t.amber} />}
       </span>
@@ -399,11 +358,11 @@ function RelativeRow({ car, slot, rowH, exiting, isPlayer, pos, provisional, gap
           {car.lapDeltaVsAvgS != null ? fmtDelta(car.lapDeltaVsAvgS) : "—"}
         </span>
       )}
-    </div>
+    </DriverRowShell>
   );
 }
 
-function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
+function Relative({ theme, config, panelOpacity = 1 }: BaseWidgetProps<RelativeConfig>) {
   const t = theme.colors;
   const mono = theme.font.mono;
   const slow = useSlow();
@@ -413,11 +372,9 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
   // the player when `soloInQualy` is on.
   const soloQualy = config.soloInQualy && curSession === "qualy";
   const cars = (slow?.cars ?? []).filter((c) => !soloQualy || c.isPlayer || c.carIdx === playerIdx);
-  // App palette by class order (blue/purple/green/red) — computed from the FULL
-  // field (not this widget's filtered/solo-qualy list) so every widget agrees
-  // on which color a class gets.
-  const ccol = classColorMap(slow?.cars ?? []);
-  const units = useSettings().units;
+  const { units, panelStyle } = useSettings();
+  const glass = panelStyle === "liquid";
+  const chrome = panelChrome(theme, glass, panelOpacity);
 
   // Provisional grid position. Before anyone sets a time (practice / pre-qualify)
   // iRacing reports no running position, so the badge would otherwise read "--".
@@ -448,25 +405,6 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
   const rowScale = config.rowScale > 0 ? config.rowScale : 1;
   const rowH = ROWH * rowScale;
 
-  // Size-aware fit: measure the rows region (which flex-fills the space left by
-  // the header/footer bars) and only ever show whole rows, so the bottom row is
-  // never clipped and there's clean padding below it.
-  const rowsRef = useRef<HTMLDivElement | null>(null);
-  const [fit, setFit] = useState(99);
-  useEffect(() => {
-    const el = rowsRef.current;
-    if (!el) return;
-    const measure = () => {
-      const fontPx = parseFloat(getComputedStyle(el).fontSize) || 13;
-      const f = Math.max(1, Math.floor((el.clientHeight - 2) / (rowH * fontPx)));
-      setFit((p) => (p === f ? p : f));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [rowH]);
-
   // Sort by relative gap (ahead → behind), keeping only cars with a known gap.
   // Drop cars that aren't in the world (`inWorld === false`): during practice the
   // roster includes drivers sitting in their garage, whose stale track-time gives
@@ -481,44 +419,51 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
     )
     .sort((a, b) => (b.gapToPlayerS ?? 0) - (a.gapToPlayerS ?? 0));
 
-  // Window: drop cars beyond ±windowSeconds (the player always stays).
-  const inWindow = ordered.filter(
-    (c) => c.isPlayer || c.carIdx === playerIdx || Math.abs(c.gapToPlayerS ?? 0) <= config.windowSeconds
-  );
-  const wpi = inWindow.findIndex((c) => c.isPlayer || c.carIdx === playerIdx);
+  const playerAt = ordered.findIndex((c) => c.isPlayer || c.carIdx === playerIdx);
 
-  // Trim the configured window down to what actually fits, keeping the player as
-  // centered as possible (drop from the larger side first).
-  const desired = config.rowsAhead + config.rowsBehind + 1;
-  const shown = Math.max(1, Math.min(desired, fit));
-  let ahead = config.rowsAhead;
-  let behind = config.rowsBehind;
-  while (ahead + behind + 1 > shown) {
-    if (ahead >= behind) ahead--;
-    else behind--;
-  }
-  let visible: CarEntry[];
-  if (wpi >= 0) {
-    visible = inWindow.slice(Math.max(0, wpi - ahead), wpi + behind + 1);
+  // Fixed slot grid from settings — height is clamped to this content budget
+  // (`clampHeightToContent`), so we never drop ahead/behind seats to "fit" a
+  // short box (that was causing 3+3 → 2+3 with empty bands above/below).
+  const ahead = Math.max(0, config.rowsAhead);
+  const behind = Math.max(0, config.rowsBehind);
+  const slotCount = ahead + behind + 1;
+  const slots: (CarEntry | null)[] = Array(slotCount).fill(null);
+  if (playerAt >= 0) {
+    slots[ahead] = ordered[playerAt];
+    const aheadCars = ordered.slice(Math.max(0, playerAt - ahead), playerAt);
+    for (let i = 0; i < aheadCars.length; i++) {
+      // Fewer than N ahead → pad empties at the top; nearest sits just above you.
+      slots[ahead - aheadCars.length + i] = aheadCars[i];
+    }
+    const behindCars = ordered.slice(playerAt + 1, playerAt + 1 + behind);
+    for (let i = 0; i < behindCars.length; i++) {
+      slots[ahead + 1 + i] = behindCars[i];
+    }
   } else {
-    visible = inWindow.slice(0, shown);
+    // No player in the ordered list — just fill from the top.
+    for (let i = 0; i < Math.min(ordered.length, slotCount); i++) slots[i] = ordered[i];
   }
+  const visible = slots.filter((c): c is CarEntry => c != null);
 
   // Row list for the slide animation: a superset of `visible` that keeps a
   // just-departed car around (fading out) until its exit transition finishes.
   // Gated on `visSig` (not `visible` itself, which is a fresh array every
   // render) so this only fires when membership/order actually changes.
   const [rows, setRows] = useState<RelativeRowState[]>([]);
-  const visSig = useMemo(() => visible.map((c) => c.carIdx).join(","), [visible]);
+  // Include empty-slot markers so a car sliding into a previously-empty slot
+  // (or vacating one) always retriggers, even when the set of carIdxs is unchanged.
+  const visSig = slots.map((c) => (c ? c.carIdx : "-")).join(",");
   // useLayoutEffect so slot assignments land before paint — useEffect left rows
   // one frame behind fresh gap data, which reads as cars ahead showing below you.
   useLayoutEffect(() => {
-    const visibleIdx = new Map(visible.map((c, slot) => [c.carIdx, slot]));
-    setRows((prev) => deriveRelativeRows(prev, visibleIdx, fit));
-    // `visible` is intentionally omitted — `visSig` already encodes everything
-    // about it (membership + order) that should retrigger this.
+    const visibleIdx = new Map<number, number>();
+    slots.forEach((c, slot) => {
+      if (c) visibleIdx.set(c.carIdx, slot);
+    });
+    setRows((prev) => deriveRelativeRows(prev, visibleIdx, slotCount));
+    // `slots` is intentionally omitted — `visSig` already encodes membership + slot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visSig, fit]);
+  }, [visSig, slotCount]);
 
   const handleExited = useCallback((carIdx: number) => {
     setRows((prev) => prev.filter((r) => r.carIdx !== carIdx));
@@ -605,9 +550,9 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
 
   // Grid columns mirror the data we actually have.
   const cols =
-    "2em" + // pos
-    (has.flag ? " 1.3em" : "") +
-    (has.car ? " 2em" : "") + // car icon, just before the name
+    "2.85em" + // pos
+    (has.car ? " 2em" : "") + // car icon
+    (has.flag ? " 1.3em" : "") + // flag, just before the name
     " minmax(3em,1fr)" + // name
     (has.lic ? " 4.2em" : "") +
     (has.ir ? " 2.7em" : "") +
@@ -616,69 +561,93 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
     (has.lapTrend ? " 2.4em" : ""); // lap form vs rolling avg
 
   return (
-    <div style={{ width: "100%", height: "100%", overflow: "hidden", display: "flex", flexDirection: "column", color: t.text, padding: theme.widgetPad, boxSizing: "border-box" }}>
-      <div style={{ display: "flex", alignItems: "center", padding: "0 0.6em 5px" }}>
-        <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.82em", letterSpacing: "0.1em" }}>RELATIVE</span>
-        <span style={{ fontFamily: theme.font.label, marginLeft: "auto", fontSize: "0.62em", color: t.textDim2, letterSpacing: "0.06em" }}>±{config.windowSeconds}s</span>
-      </div>
-
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+        gap: SECTION_GAP,
+        color: t.text,
+        boxSizing: "border-box",
+      }}
+    >
       {headerChips.length > 0 && (
-        <div style={{ paddingBottom: 5, marginBottom: 4, borderBottom: `1px solid ${hexToRgba("#ffffff", 0.12)}` }}>
-          <InfoBar chips={headerChips} color={t.text} dim={t.textDim} mono={mono} scale={fieldScale} />
+        <div style={{ ...chrome, flex: "none", padding: theme.widgetPad, boxSizing: "border-box" }}>
+          {glass && <GlassSpecular />}
+          <div style={{ position: "relative", zIndex: 1 }}>
+            <InfoBar chips={headerChips} color={t.text} dim={t.textDim} mono={mono} scale={fieldScale} />
+          </div>
         </div>
       )}
 
-      {/* `justifyContent: "center"` vertically centers the rows block within the
-          flex-filled slot area so a shorter field doesn't leave a dead band
-          above the footer — the block itself (not individual rows) is what's
-          centered. The rows stay absolutely positioned by `slot * ROWH`
-          *within that block*, so the slide animation's `top` math (relative to
-          its nearest positioned ancestor, the inner wrapper below) is
-          untouched. */}
-      <div ref={rowsRef} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-        {rows.length === 0 ? (
-          <div style={{ textAlign: "center", color: t.textDim, fontSize: "0.82em" }}>No field data</div>
-        ) : (
-          <div style={{ position: "relative", height: `${Math.max(visible.length, rows.length) * rowH}em` }}>
-            {rows.map((r) => {
-              const car = carDataRef.current.get(r.carIdx);
-              if (!car) return null;
-              const isPlayer = car.isPlayer || car.carIdx === playerIdx;
-              const gap = car.gapToPlayerS ?? 0;
-              const inPit = car.onPitRoad === true;
-              const lic = parseLicense(car.safetyRating);
-              const { pos, provisional } = posOf(car);
-              const highlight = highlightsRef.current.get(r.carIdx) ?? null;
-              return (
-                <RelativeRow
-                  key={r.carIdx}
-                  car={car}
-                  slot={r.slot}
-                  rowH={rowH}
-                  exiting={r.exiting}
-                  isPlayer={isPlayer}
-                  pos={pos}
-                  provisional={provisional}
-                  gap={gap}
-                  inPit={inPit}
-                  lic={lic}
-                  t={t}
-                  mono={mono}
-                  ccol={ccol}
-                  has={has}
-                  cols={cols}
-                  highlight={highlight}
-                  onExited={handleExited}
-                />
-              );
-            })}
-          </div>
-        )}
+      {/* Main driver list — own panel, always present. Rows are flush to the
+          panel edges (no outer pad); empty slots keep recessed plates + sunken
+          dividers so the grid reads even when neighbours are missing. */}
+      <div
+        style={{
+          ...chrome,
+          flex: "0 0 auto",
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "flex-start",
+          padding: 0,
+          boxSizing: "border-box",
+          // Square corners so flush rows don't leave rounded empty gutters.
+          borderRadius: theme.radius,
+          overflow: "hidden",
+        }}
+      >
+        {glass && <GlassSpecular />}
+        <div style={{ position: "relative", zIndex: 1, flex: "0 0 auto" }}>
+          {ordered.length === 0 ? (
+            <div style={{ textAlign: "center", color: t.textDim, fontSize: "0.82em", padding: theme.widgetPad }}>No field data</div>
+          ) : (
+            <DriverListTrough slots={slotCount} rowH={rowH}>
+              {rows.map((r) => {
+                const car = carDataRef.current.get(r.carIdx);
+                if (!car) return null;
+                const isPlayer = car.isPlayer || car.carIdx === playerIdx;
+                const gap = car.gapToPlayerS ?? 0;
+                const inPit = car.onPitRoad === true;
+                const lic = parseLicense(car.safetyRating);
+                const { pos, provisional } = posOf(car);
+                const highlight = highlightsRef.current.get(r.carIdx) ?? null;
+                return (
+                  <RelativeRow
+                    key={r.carIdx}
+                    car={car}
+                    slot={r.slot}
+                    rowH={rowH}
+                    exiting={r.exiting}
+                    isPlayer={isPlayer}
+                    pos={pos}
+                    provisional={provisional}
+                    gap={gap}
+                    inPit={inPit}
+                    lic={lic}
+                    t={t}
+                    mono={mono}
+                    has={has}
+                    cols={cols}
+                    nameFormat={config.nameFormat === "short" ? "short" : "full"}
+                    highlight={highlight}
+                    onExited={handleExited}
+                  />
+                );
+              })}
+            </DriverListTrough>
+          )}
+        </div>
       </div>
 
       {footerChips.length > 0 && (
-        <div style={{ paddingTop: 5, marginTop: 4, borderTop: `1px solid ${hexToRgba("#ffffff", 0.12)}` }}>
-          <InfoBar chips={footerChips} color={t.text} dim={t.textDim} mono={mono} scale={fieldScale} />
+        <div style={{ ...chrome, flex: "none", padding: theme.widgetPad, boxSizing: "border-box" }}>
+          {glass && <GlassSpecular />}
+          <div style={{ position: "relative", zIndex: 1 }}>
+            <InfoBar chips={footerChips} color={t.text} dim={t.textDim} mono={mono} scale={fieldScale} />
+          </div>
         </div>
       )}
     </div>
@@ -691,16 +660,44 @@ function Relative({ theme, config }: BaseWidgetProps<RelativeConfig>) {
 // EM = 14.
 function relativeMinWidth(config: RelativeConfig): number {
   const EM = 14;
-  const colEms = [2]; // pos
-  if (config.showFlag) colEms.push(1.3);
+  const colEms = [2.85]; // pos
   if (config.showCarIcon) colEms.push(2);
+  if (config.showFlag) colEms.push(1.3);
   colEms.push(3); // driver name (minmax(3em,…) lower bound)
   if (config.showLicense) colEms.push(4.2);
   if (config.showIrating) colEms.push(2.7);
   if (config.showTyre) colEms.push(2);
   colEms.push(3.1); // gap
-  const sumEm = colEms.reduce((a, b) => a + b, 0) + 1 * (colEms.length - 1) /* col gaps */ + 1.5 /* 0.75em row padding ×2 */;
-  return Math.ceil(sumEm * EM + 24 /* theme.widgetPad: 12px horizontal ×2 */);
+  const sumEm = colEms.reduce((a, b) => a + b, 0) + parseFloat(DRIVER_COL_GAP) * (colEms.length - 1) + parseFloat(DRIVER_ROW_PAD_R);
+  return Math.ceil(sumEm * EM);
+}
+
+/** Design-px height (@ scale 1) for the configured ahead/behind grid + chrome.
+ *  Changing drivers-ahead/behind (or row scale) resizes the instance on Y via
+ *  the host's contentHeight delta — so the box tracks the locked slot count.
+ *
+ *  Must leave the main list's *clientHeight* ≥ `rows × ROWH × EM` after header,
+ *  footer, section gaps, and each panel's 1px borders — otherwise FitContent
+ *  scales the whole widget down to compensate.
+ */
+function relativeContentHeight(config: RelativeConfig): number {
+  const EM = 14;
+  const rowScale = config.rowScale > 0 ? config.rowScale : 1;
+  const fieldScale = config.fieldScale > 0 ? config.fieldScale : 1;
+  const rows = Math.max(1, config.rowsAhead + config.rowsBehind + 1);
+  const padY = 16; // theme.widgetPad top+bottom (8px × 2)
+  // InfoBar line (INFO_BAR_EM × value scale) + icon metrics; ceil so we don't undershoot.
+  const chipContent = Math.ceil(INFO_BAR_EM * 1.35 * fieldScale * EM);
+  const panelBorderY = 2; // 1px top + bottom on each chrome panel (border-box)
+  const rowBlock = Math.ceil(rows * ROWH * rowScale * EM);
+  const hasHeader = (config.header ?? []).some((e) => e.on);
+  const hasFooter = (config.footer ?? []).some((e) => e.on);
+  const headerH = hasHeader ? padY + chipContent + panelBorderY : 0;
+  const footerH = hasFooter ? padY + chipContent + panelBorderY : 0;
+  // Main border-box must be rowBlock + borders so clientHeight ≥ rowBlock.
+  const mainH = rowBlock + panelBorderY;
+  const gaps = (hasHeader ? SECTION_GAP : 0) + (hasFooter ? SECTION_GAP : 0);
+  return headerH + mainH + footerH + gaps;
 }
 
 export const relativeDef: WidgetDefinition<RelativeConfig> = {
@@ -709,16 +706,23 @@ export const relativeDef: WidgetDefinition<RelativeConfig> = {
   // Wide enough that at full scale (1.0, readable text) the fixed-width columns
   // (pos/flag/icon/license/iR/tyre/gap) don't crowd out the driver-name column's
   // `1fr` — see the note above `relativeMinWidth` for the em budget.
-  defaultSize: { w: 520, h: 250 },
-  minSize: { w: 280, h: 110 },
+  defaultSize: { w: 640, h: relativeContentHeight(defaultConfig) },
+  minSize: { w: 280, h: 80 },
   minContentWidth: relativeMinWidth,
+  contentHeight: relativeContentHeight,
+  // Extra height past the configured ahead/behind slots is empty — lock the box
+  // height to the content-driven size (min == max) so resize can't stretch or
+  // starve the slot grid.
+  clampHeightToContent: true,
+  // Host stays transparent so header / main / footer can be separate floating
+  // panels with visible gaps between them (each section paints its own chrome).
+  transparentPanel: () => true,
   defaultConfig,
   requiredPaths: ["slow"],
   requiredCapabilities: ["relativeGaps"],
   configSchema: [
-    { key: "rowsAhead", label: "Rows ahead", type: "number", min: 1, max: 8, step: 1 },
-    { key: "rowsBehind", label: "Rows behind", type: "number", min: 1, max: 8, step: 1 },
-    { key: "windowSeconds", label: "Window (s)", type: "number", min: 5, max: 60, step: 5 },
+    { key: "rowsAhead", label: "Drivers ahead", type: "number", min: 0, max: 12, step: 1 },
+    { key: "rowsBehind", label: "Drivers behind", type: "number", min: 0, max: 12, step: 1 },
     { key: "fieldScale", label: "Field scale", type: "number", min: 0.6, max: 2, step: 0.05 },
     { key: "rowScale", label: "Row scale", type: "number", min: 0.6, max: 2, step: 0.05 },
     { key: "showFlag", label: "Flags", type: "boolean" },
@@ -727,6 +731,15 @@ export const relativeDef: WidgetDefinition<RelativeConfig> = {
     { key: "showTyre", label: "Tyre", type: "boolean" },
     { key: "showCarIcon", label: "Car icon", type: "boolean" },
     { key: "soloInQualy", label: "Solo in qualy", type: "boolean" },
+    {
+      key: "nameFormat",
+      label: "Driver names",
+      type: "enum",
+      options: [
+        { value: "full", label: "First Last" },
+        { value: "short", label: "F. Last" },
+      ],
+    },
     { key: "header", label: "Header", type: "fieldList", fields: RELATIVE_INFO_CATALOG },
     { key: "footer", label: "Footer", type: "fieldList", fields: RELATIVE_INFO_CATALOG },
   ],

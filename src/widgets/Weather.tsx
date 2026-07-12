@@ -1,7 +1,6 @@
 import { useSlow } from "../store/hooks";
 import { useSettings } from "../store/appSettings";
 import { tempValue, tempLabel, speedValue, speedLabel } from "./format";
-import { WidgetTitle } from "./WidgetTitle";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 // Small inline stroke-icon set for this widget, matching the manager's
@@ -125,10 +124,6 @@ function Weather({ theme, config }: BaseWidgetProps<WeatherConfig>) {
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", gap: theme.space.sm, color: t.text, padding: theme.widgetPad, boxSizing: "border-box", overflow: "hidden" }}>
-      <div style={{ flex: "0 0 auto" }}>
-        <WidgetTitle title="Weather" theme={theme} />
-      </div>
-
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, flex: "0 0 auto" }}>
         {statCell("thermometer", "AIR", air != null ? `${Math.round(air)}${tLabel}` : "--", t.text)}
         {statCell("flame", "TRACK", track != null ? `${Math.round(track)}${tLabel}` : "--", t.amber)}

@@ -114,12 +114,11 @@ function RaceControl({ theme, config }: BaseWidgetProps<RaceControlConfig>) {
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: theme.widgetPad, boxSizing: "border-box", overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: theme.space.sm }}>
-        <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.82em", letterSpacing: "0.1em" }}>RACE CONTROL</span>
-        {chip && (
-          <span style={{ fontFamily: theme.font.label, marginLeft: "auto", fontWeight: 700, fontSize: "0.6em", letterSpacing: "0.1em", color: "#0a0b0e", background: chip.color, padding: "1px 9px", borderRadius: 5 }}>{chip.label}</span>
-        )}
-      </div>
+      {chip ? (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: theme.space.sm }}>
+          <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.6em", letterSpacing: "0.1em", color: "#0a0b0e", background: chip.color, padding: "1px 9px", borderRadius: 5 }}>{chip.label}</span>
+        </div>
+      ) : null}
       {messages.length === 0 ? (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <span style={{ fontFamily: theme.font.label, fontSize: "0.72em", color: t.textDim2, letterSpacing: "0.04em" }}>Waiting for race control…</span>

@@ -241,10 +241,10 @@ pub fn country_from_flair(flair_id: Option<u32>) -> Option<String> {
         233 => "YE",
         234 => "ZM",
         235 => "ZW",
-        236 => "GB",
-        237 => "GB",
-        238 => "GB",
-        239 => "GB",
+        236 => "GB-ENG", // England
+        237 => "GB-SCT", // Scotland
+        238 => "GB-WLS", // Wales
+        239 => "GB-NIR", // Northern Ireland
         240 => "BQ",
         241 => "CW",
         242 => "SX",
@@ -261,7 +261,7 @@ mod tests {
     fn known_flairs() {
         assert_eq!(country_from_flair(Some(71)).as_deref(), Some("FR"));
         assert_eq!(country_from_flair(Some(223)).as_deref(), Some("US"));
-        assert_eq!(country_from_flair(Some(236)).as_deref(), Some("GB")); // England
+        assert_eq!(country_from_flair(Some(236)).as_deref(), Some("GB-ENG")); // England
         assert_eq!(country_from_flair(Some(2)), None); // iRacing logo / unknown
         assert_eq!(country_from_flair(None), None);
     }

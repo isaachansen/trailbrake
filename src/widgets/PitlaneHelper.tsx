@@ -87,7 +87,6 @@ function PitlaneHelper({ theme, config }: BaseWidgetProps<PitlaneHelperConfig>) 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", gap: sp.md, padding: theme.widgetPad, boxSizing: "border-box", color: t.text }}>
       <WidgetTitle
-        title="Pit Lane"
         theme={theme}
         right={
           <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.55em", letterSpacing: "0.08em", color: onPitRoad ? "#0a0b0e" : t.textDim2, background: onPitRoad ? t.amber : "transparent", padding: "2px 8px", borderRadius: 4 }}>

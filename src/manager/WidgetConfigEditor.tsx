@@ -98,7 +98,9 @@ export function WidgetConfigEditor({ instance }: Props) {
       if (deltaDesign !== 0) {
         const eff = layoutStore.getEffective(instance);
         const minH = layoutStore.minSizeFor(instance).h;
-        const h = Math.max(minH, Math.round(instance.size.h + deltaDesign * eff.scale));
+        const maxH = layoutStore.maxSizeFor({ ...instance, config: next })?.h;
+        let h = Math.max(minH, Math.round(instance.size.h + deltaDesign * eff.scale));
+        if (maxH != null) h = Math.min(h, maxH);
         setInstance({ size: { w: instance.size.w, h } });
       }
     }

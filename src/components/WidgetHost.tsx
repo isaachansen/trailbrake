@@ -7,7 +7,7 @@ import { layoutStore, type WidgetInstance } from "../store/layout";
 import { getWidgetDef } from "../widgets/registry";
 import { useSettings } from "../store/appSettings";
 import { FitContent } from "./FitContent";
-import { glassChrome, GLASS_SHADOW, GLASS_BORDER, GlassSpecular } from "./liquidGlass";
+import { GLASS_SHADOW, GLASS_BORDER, GlassSpecular, panelChrome } from "./liquidGlass";
 import type { Capabilities } from "../store/types";
 import type { SessionStateKey } from "../store/sessionState";
 import type { Theme } from "../theme/theme";
@@ -224,8 +224,10 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
     // Content-aware floor (tracks enabled columns × scale), so the handle stops
     // before the widget would clip/squish rather than at a fixed minimum.
     const minSz = layoutStore.minSizeFor(instance);
+    const maxSz = layoutStore.maxSizeFor(instance);
     w = Math.max(minSz.w, w);
     h = Math.max(minSz.h, h);
+    if (maxSz) h = Math.min(h, maxSz.h);
 
     const partial: Partial<WidgetInstance> = { size: { w, h } };
     if (fromWest || fromNorth) {
@@ -262,7 +264,7 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
   const dualBorder = hugContent && editing;
 
   const panelSurface = glass
-    ? glassChrome(panelAlpha)
+    ? panelChrome(theme, true, panelAlpha)
     : {
         background: chromeless ? "transparent" : surfaceBg,
         backdropFilter: chromeless ? "none" : theme.panelBlur,
@@ -367,6 +369,7 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
                   config={instance.config as any}
                   caps={caps}
                   size={size}
+                  panelOpacity={panelAlpha}
                   {...(hugContent ? { allocatedSize: { w: instance.size.w, h: instance.size.h } } : {})}
                 />
               )}

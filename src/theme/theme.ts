@@ -2,7 +2,7 @@
 // components.
 //
 // Current theme: "APEX OVERLAYS v2" (from the Claude Design handoff) — Saira
-// Condensed + JetBrains Mono, a near-black glass look with a pink player accent.
+// Condensed + JetBrains Mono, a near-black glass look with a blue player accent.
 
 export interface Theme {
   colors: {
@@ -63,7 +63,7 @@ export interface Theme {
   widgetPad: string;
 }
 
-const PINK = "#ff2d8e";
+const ACCENT = "#3d8bff";
 
 export const defaultTheme: Theme = {
   colors: {
@@ -75,7 +75,7 @@ export const defaultTheme: Theme = {
     surface: "rgba(18, 20, 27, 0.78)",
     surfaceBorder: "rgba(255, 255, 255, 0.10)",
     cell: "rgba(255, 255, 255, 0.04)",
-    playerRow: "rgba(255, 45, 142, 0.16)",
+    playerRow: "rgba(61, 139, 255, 0.16)",
     text: "#eef1f5",
     // Brightened from #8a909c / #565c68 for legibility: the dim uppercase labels
     // (standings headers, track-map name, unit/eyebrow labels) were too low-contrast
@@ -88,12 +88,12 @@ export const defaultTheme: Theme = {
     clutch: "#37d4ea", // cyan
     steering: "rgba(255, 255, 255, 0.85)",
     gridLine: "rgba(255, 255, 255, 0.06)",
-    accent: PINK,
+    accent: ACCENT,
     best: "#b06bff", // purple
     amber: "#ffb43d",
     gain: "#2fe08a",
     loss: "#ff495e",
-    edit: PINK,
+    edit: ACCENT,
   },
   font: {
     family: '"Saira Condensed", "Segoe UI", system-ui, sans-serif',
@@ -101,7 +101,7 @@ export const defaultTheme: Theme = {
     mono: '"JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace',
     sizeBase: 14,
   },
-  radius: 16,
+  radius: 8,
   // `brightness(0.55)` darkens whatever backdrop shows through the glass BEFORE
   // it's blended with `surface`/`cell` colors — this is what actually keeps the
   // floor dark at any panel-opacity setting (opacity only matters once it's < 1;

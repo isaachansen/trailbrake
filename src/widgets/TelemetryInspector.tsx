@@ -3,7 +3,6 @@ import { useSlow } from "../store/hooks";
 import { useStoreInstance } from "../store/storeContext";
 import { speedValue, speedLabel, tempValue, tempLabel, fuelValue, fuelLabel } from "./format";
 import { useSettings } from "../store/appSettings";
-import { WidgetTitle } from "./WidgetTitle";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface TelemetryInspectorConfig {
@@ -98,8 +97,6 @@ function TelemetryInspector({ theme, config }: BaseWidgetProps<TelemetryInspecto
         color: t.text,
       }}
     >
-      <WidgetTitle title="Telemetry Inspector" theme={theme} />
-
       <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
       <div style={{ height: "100%", overflowY: "auto", overflowX: "hidden" }}>
       {config.showFast && fast && (

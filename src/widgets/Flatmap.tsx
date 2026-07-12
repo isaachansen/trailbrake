@@ -183,20 +183,21 @@ function Flatmap({ theme, config }: BaseWidgetProps<FlatmapConfig>) {
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: theme.widgetPad, boxSizing: "border-box" }}>
-      <div style={{ marginBottom: theme.space.sm }}>
-        <WidgetTitle
-          title="Track Order"
-          theme={theme}
-          right={
-            <div style={{ display: "flex", gap: 11 }}>
-              {legend.map((c) => (
-                <span key={c.name}>{legendDot(c.name, c.color)}</span>
-              ))}
-            </div>
-          }
-        />
-      </div>
-      <div style={{ flex: 1, minHeight: 0, position: "relative", background: "rgba(255,255,255,0.03)", borderRadius: 11, overflow: "hidden" }}>
+      {legend.length > 0 && (
+        <div style={{ marginBottom: theme.space.sm }}>
+          <WidgetTitle
+            theme={theme}
+            right={
+              <div style={{ display: "flex", gap: 11 }}>
+                {legend.map((c) => (
+                  <span key={c.name}>{legendDot(c.name, c.color)}</span>
+                ))}
+              </div>
+            }
+          />
+        </div>
+      )}
+      <div style={{ flex: 1, minHeight: 0, position: "relative", background: "rgba(255,255,255,0.03)", borderRadius: 7, overflow: "hidden" }}>
         <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
       </div>
     </div>

@@ -397,7 +397,8 @@ pub struct CarState {
     pub class_color: Option<u32>,
     /// Car number (e.g. "92").
     pub car_number: Option<String>,
-    /// 2-letter country code for a flag swatch (sim may not provide).
+    /// ISO country / region code for a flag swatch (e.g. "US", "GB-ENG").
+    /// From LLCountry/Country when present, else derived from FlairID.
     pub country: Option<String>,
     /// Positions gained (+) / lost (−) since the start.
     pub positions_gained: Option<i32>,

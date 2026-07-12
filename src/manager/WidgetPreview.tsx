@@ -15,10 +15,10 @@ import { glassChrome, GlassSpecular } from "../components/liquidGlass";
 import { previewStoreFor } from "./previewStore";
 import type { WidgetDefinition } from "../widgets/contract";
 
-function PreviewInner({ def, config }: { def: WidgetDefinition; config: Record<string, unknown> }) {
+function PreviewInner({ def, config, panelOpacity }: { def: WidgetDefinition; config: Record<string, unknown>; panelOpacity: number }) {
   const caps = useCaps(); // reads the preview store via the provider below
   const Comp = def.Component;
-  return <FitContent>{(size) => <Comp theme={defaultTheme} config={config} caps={caps} size={size} />}</FitContent>;
+  return <FitContent>{(size) => <Comp theme={defaultTheme} config={config} caps={caps} size={size} panelOpacity={panelOpacity} />}</FitContent>;
 }
 
 interface Props {
@@ -48,7 +48,7 @@ export function WidgetPreview({ def, maxW, maxH, config, opacity = 1, widgetScal
   // mode. Only suppress chrome here for widgets confirmed to self-paint
   // unconditionally; default to painting chrome so a future transparentPanel
   // widget doesn't silently lose its box.
-  const SELF_PAINTS_OWN_CHROME_IN_PREVIEW = new Set(["spotter"]);
+  const SELF_PAINTS_OWN_CHROME_IN_PREVIEW = new Set(["spotter", "relative"]);
   const transparent = (def.transparentPanel?.(cfg) ?? false) && SELF_PAINTS_OWN_CHROME_IN_PREVIEW.has(def.id);
   // Call unconditionally — hooks must never be skipped by a short-circuit branch
   // (a transparent-panel widget still needs this hook to run every render).
@@ -96,7 +96,7 @@ export function WidgetPreview({ def, maxW, maxH, config, opacity = 1, widgetScal
         <StoreProvider store={previewStoreFor(def.id)}>
           <ScreenLayerContext.Provider value={{ el: layer, preview: true, fullScreen: true }}>
             <div className="wp-body" style={{ position: "relative", zIndex: 1 }}>
-              <PreviewInner def={def} config={cfg} />
+              <PreviewInner def={def} config={cfg} panelOpacity={panelAlpha} />
             </div>
           </ScreenLayerContext.Provider>
         </StoreProvider>

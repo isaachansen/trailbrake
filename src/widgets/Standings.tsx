@@ -1,5 +1,5 @@
 // Standings: rich, optionally multi-class grouped field — position change, car
-// number, country flag, driver, license badge, iRating (+delta), gap, interval,
+// number, country flag, driver, license badge, iRating (+delta), gap-to-best-lap,
 // last/best lap, tyre compound. Slow-path widget.
 //
 // Columns are built dynamically and a column is dropped entirely when no car can
@@ -7,10 +7,11 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSlow, useCaps } from "../store/hooks";
-import { fmtGap, fmtLapTime, fmtDelta, hexToRgba } from "./format";
+import { fmtLapTime, fmtDelta, formatDriverName, type DriverNameFormat } from "./format";
 import { parseLicense, classColorMap, classColorOf } from "./raceColors";
 import { FlagSwatch } from "./FlagSwatch";
 import { LicenseBadge } from "./LicenseBadge";
+import { PosChip } from "./PosChip";
 import { TyreBadge } from "./TyreBadge";
 import { PitBadge } from "./PitBadge";
 import { CarIcon, carIconFor, iracingIcon } from "./carIcons";
@@ -18,12 +19,24 @@ import type { CarEntry } from "../store/types";
 import { buildProvisionalPositions, standingPosOf, standingSortKey } from "./provisionalPos";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 import type { Theme } from "../theme/theme";
+import {
+  DRIVER_COL_GAP,
+  DRIVER_ROW_H,
+  DRIVER_ROW_H_COMPACT,
+  DRIVER_ROW_PAD_L,
+  DRIVER_ROW_PAD_R,
+  DriverListTrough,
+  DriverRowShell,
+  PositionFlash,
+  flashColor,
+  driverRowPad,
+} from "./driverList";
 
 export interface StandingsConfig {
   maxRows: number;
-  multiclass: boolean;
   myClassOnly: boolean;
-  showInterval: boolean;
+  /** Tighter rows + type — more drivers in the same box. */
+  compact: boolean;
   showLastLap: boolean;
   showBest: boolean;
   showIrating: boolean;
@@ -31,13 +44,14 @@ export interface StandingsConfig {
   showLicense: boolean;
   showTyre: boolean;
   showCarIcon: boolean;
+  /** Driver name style: full "First Last" or abbreviated "F. Last". */
+  nameFormat: DriverNameFormat;
 }
 
 const defaultConfig: StandingsConfig = {
   maxRows: 16,
-  multiclass: true,
   myClassOnly: false,
-  showInterval: true,
+  compact: false,
   showLastLap: true,
   showBest: true,
   showIrating: true,
@@ -45,7 +59,34 @@ const defaultConfig: StandingsConfig = {
   showLicense: true,
   showTyre: true,
   showCarIcon: true,
+  nameFormat: "full",
 };
+
+/** Row / type metrics — row height/pad locked to shared driver-list constants. */
+function standingsDensity(compact: boolean) {
+  return compact
+    ? {
+        rowH: DRIVER_ROW_H_COMPACT,
+        rowGapPx: 0,
+        font: 0.95,
+        carIcon: "1.55em",
+        padL: DRIVER_ROW_PAD_L,
+        padR: DRIVER_ROW_PAD_R,
+      }
+    : {
+        rowH: DRIVER_ROW_H,
+        rowGapPx: 0,
+        font: 1.08,
+        carIcon: "1.7em",
+        padL: DRIVER_ROW_PAD_L,
+        padR: DRIVER_ROW_PAD_R,
+      };
+}
+
+type StandingsDensity = ReturnType<typeof standingsDensity>;
+
+/** Left inset for SOF / class meta and the POS column header — keep them aligned. */
+const META_PAD_L = "0.55em";
 
 /** Average iRating across rated cars — matches iRacing's Strength of Field. */
 function strengthOfField(cars: CarEntry[]): number | null {
@@ -56,9 +97,9 @@ function strengthOfField(cars: CarEntry[]): number | null {
 
 function SofValue({ value, theme, mono, t }: { value: number; theme: Theme; mono: string; t: Theme["colors"] }) {
   return (
-    <span style={{ display: "inline-flex", alignItems: "baseline", gap: 4, fontSize: "0.68em" }}>
+    <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5, fontSize: "0.82em" }}>
       <span style={{ fontFamily: theme.font.label, letterSpacing: "0.06em", fontWeight: 700, color: t.textDim }}>SOF</span>
-      <span style={{ fontFamily: mono, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: t.text }}>{value}</span>
+      <span style={{ fontFamily: mono, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: t.text }}>{value}</span>
     </span>
   );
 }
@@ -70,13 +111,16 @@ function standingsContentHeightPx(
   fontPx: number,
   multiclass: boolean,
   showSofBar: boolean,
+  density: StandingsDensity,
 ): number {
-  const rowH = 1.9 * fontPx + 4;
-  const colH = 1.6 * fontPx;
-  let h = 12 + colH + 6; // root padding + column header + bottom breathing room
-  if (showSofBar) h += 1.1 * fontPx + 6;
+  const rowH = density.rowH * fontPx + density.rowGapPx;
+  const colH = 1.7 * fontPx;
+  // Meta / column headers sit above the flush trough; no outer root pad.
+  let h = 4;
   for (const g of groups) {
-    if (multiclass && g.name) h += 1.3 * fontPx + 10;
+    if (multiclass && g.name) h += 1.35 * fontPx + 8;
+    else if (showSofBar) h += 1.2 * fontPx + 6;
+    h += colH;
     const key = String(g.id ?? "all");
     const animRows = rowsByGroup.get(key) ?? [];
     h += Math.max(g.display.length, animRows.length) * rowH;
@@ -87,10 +131,8 @@ function standingsContentHeightPx(
 interface RowCtx {
   car: CarEntry;
   pos: number | null;
-  /** Gap to the class leader in seconds; null when the sim has no gap for this car. */
-  gapToLeader: number | null;
-  interval: number | null;
-  isFirst: boolean;
+  /** How much slower this car's best lap is vs class/session best (seconds). */
+  gapToBest: number | null;
   isPlayer: boolean;
   fastest: boolean;
 }
@@ -117,10 +159,9 @@ interface Col {
 //
 // TODO: share with Relative.tsx's row animation once both settle.
 
+// TODO: share deriveStandingsRows with Relative once both settle.
+
 const SLIDE_MS = 400; // position-swap glide (F1 timing-tower feel)
-const ENTER_MS = 240; // fade-in when a car enters the visible rows
-const EXIT_MS = 240; // fade-out when a car leaves the visible rows
-const FLASH_MS = 900; // brief gain/loss tint after a position change
 
 interface StandingsRowState {
   carIdx: number;
@@ -175,99 +216,42 @@ function deriveStandingsRows(prev: StandingsRowState[], visibleIdx: Map<number, 
   return changed ? next : prev;
 }
 
-/** A brief tinted overlay for a row that just gained or lost a position.
- *  Mounts opaque (no transition) so it appears instantly, then flips to
- *  transparent on the next paint so the fade-out plays as a proper CSS
- *  transition — independent of the ~200ms slow-path tick rate. */
-function PositionFlash({ event, color }: { event: HighlightEvent; color: string }) {
-  const [faded, setFaded] = useState(false);
-  useEffect(() => {
-    setFaded(false);
-    const raf = requestAnimationFrame(() => setFaded(true));
-    return () => cancelAnimationFrame(raf);
-  }, [event.id]);
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        borderRadius: 8,
-        pointerEvents: "none",
-        background: color,
-        opacity: faded ? 0 : 1,
-        transition: faded ? `opacity ${FLASH_MS}ms ease-out` : "none",
-      }}
-    />
-  );
-}
-
 interface StandingsRowProps {
   x: RowCtx;
   slot: number;
   exiting: boolean;
+  /** Slot pitch in em (equals row box — no gap, matching Relative). */
   rowh: number;
   template: string;
-  colgap: string;
-  padx: string;
   cols: Col[];
   ta: (a: Col["align"]) => React.CSSProperties["textAlign"];
-  ccol: Map<number, string>;
   t: Theme["colors"];
   highlight: HighlightEvent | null;
   onExited: (carIdx: number) => void;
 }
 
-/** One standings row. Kept as its own component (module scope) purely so it
- *  can own the tiny bit of local state an enter fade needs: render invisible
- *  on mount, then flip to visible next paint so the opacity transition
- *  actually plays. */
-function StandingsRow({ x, slot, exiting, rowh, template, colgap, padx, cols, ta, ccol, t, highlight, onExited }: StandingsRowProps) {
-  const [entered, setEntered] = useState(false);
-  useEffect(() => {
-    const raf = requestAnimationFrame(() => setEntered(true));
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
-  const steadyOpacity = x.car.onPitRoad === true && !x.isPlayer ? 0.72 : 1;
-  const opacity = exiting || !entered ? 0 : steadyOpacity;
-
+/** One standings row — shared DriverRowShell + dynamic column cells. */
+function StandingsRow({ x, slot, exiting, rowh, template, cols, ta, t, highlight, onExited }: StandingsRowProps) {
   return (
-    <div
-      onTransitionEnd={(e) => {
-        // Only the opacity leg matters here — `top`/`background` also transition
-        // on this node and would otherwise fire spurious "exit" removals.
-        if (exiting && e.propertyName === "opacity") onExited(x.car.carIdx);
-      }}
-      style={{
-        position: "absolute",
-        left: 0,
-        right: 0,
-        top: `${slot * rowh}em`,
-        display: "grid",
-        gridTemplateColumns: template,
-        gap: colgap,
-        alignItems: "center",
-        height: "1.9em",
-        padding: `0 ${padx}`,
-        borderRadius: 8,
-        background: x.isPlayer ? "rgba(255, 45, 142, 0.32)" : hexToRgba(classColorOf(ccol, x.car.carClassId), 0.16),
-        boxShadow: x.isPlayer ? `inset 0 0 0 1.5px ${t.accent}` : "none",
-        color: x.isPlayer ? "#fff" : t.textDim,
-        fontWeight: x.isPlayer ? 800 : 500,
-        opacity,
-        // The mover glides past its neighbor on `top`; opacity handles the
-        // enter/exit fade (a shorter duration than the slide so departures feel
-        // brisk rather than draggy).
-        transition: `top ${SLIDE_MS}ms cubic-bezier(.4,0,.2,1), opacity ${exiting ? EXIT_MS : ENTER_MS}ms ease-out, background 0.2s`,
-      }}
+    <DriverRowShell
+      slot={slot}
+      rowH={rowh}
+      isPlayer={x.isPlayer}
+      exiting={exiting}
+      steadyOpacity={x.car.onPitRoad === true && !x.isPlayer ? 0.72 : 1}
+      gridTemplateColumns={template}
+      accent={t.accent}
+      slideMs={SLIDE_MS}
+      onExited={() => onExited(x.car.carIdx)}
+      style={{ color: x.isPlayer ? "#fff" : t.textDim }}
     >
-      {highlight && <PositionFlash event={highlight} color={hexToRgba(highlight.kind === "gain" ? t.gain : t.loss, 0.32)} />}
+      {highlight && <PositionFlash eventId={highlight.id} color={flashColor(highlight.kind, t)} />}
       {cols.map((c) => (
         <div key={c.id} style={{ minWidth: 0, textAlign: ta(c.align) }}>
           {c.cell(x)}
         </div>
       ))}
-    </div>
+    </DriverRowShell>
   );
 }
 
@@ -278,6 +262,7 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
   const playerIdx = slow?.playerCarIdx ?? null;
   const t = theme.colors;
   const mono = theme.font.mono;
+  const density = standingsDensity(!!config.compact);
 
   // Full session roster — everyone in standings, including drivers in other
   // practice entities or still in the garage. Relative filters `inWorld` so only
@@ -301,14 +286,17 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
     return out;
   }, [field]);
   const { provPos, provClassPos } = useMemo(() => buildProvisionalPositions(field), [field]);
-  const sortKey = (c: CarEntry) => standingSortKey(c, config.multiclass, provPos, provClassPos);
-  let cars = [...field].sort((a, b) => sortKey(a) - sortKey(b));
+  let cars = [...field];
   const playerClass = cars.find((c) => c.isPlayer || c.carIdx === playerIdx)?.carClassId ?? null;
   if (config.myClassOnly && playerClass != null) cars = cars.filter((c) => c.carClassId === playerClass);
 
-  // Distinct classes among the shown cars — drives the row-fit measurement below
-  // (each class header costs a row's worth of height in multiclass mode).
+  // Auto-detect: two or more distinct class ids → multiclass grouping / class pos.
+  // "My class only" collapses this to a single-class view by design.
   const numClasses = new Set(cars.map((c) => c.carClassId ?? null)).size;
+  const multiclass = numClasses > 1;
+
+  const sortKey = (c: CarEntry) => standingSortKey(c, multiclass, provPos, provClassPos);
+  cars = [...cars].sort((a, b) => sortKey(a) - sortKey(b));
 
   // Size-aware row budget: measure how many rows actually fit the box (real font
   // px includes the per-widget scale), capped by `maxRows`. Drives how many cars
@@ -317,23 +305,25 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
   const [fitRows, setFitRows] = useState(99);
   // Real font px (includes the per-widget scale) — also used below to size the
   // per-group animation slot so it reserves exactly the same vertical space
-  // the row used to occupy in normal flow (1.9em row + 2px/2px margin).
+  // the row used to occupy in normal flow (row box + gap).
   const [fontPx, setFontPx] = useState(13);
   useEffect(() => {
     const el = rootRef.current;
     if (!el || allocation.h <= 0) return;
     const measure = () => {
       const fontPx = parseFloat(getComputedStyle(el).fontSize) || 13;
-      const nc = config.multiclass ? numClasses : 0;
+      const nc = multiclass ? numClasses : 0;
       // Exact per-element heights (em → px) so we only ever fit WHOLE rows:
-      //   row 1.9em + 4px margin · column header 1.6em · class header 1.3em + 10px margin.
-      const rowH = 1.9 * fontPx + 4;
-      const colH = 1.6 * fontPx;
-      const classH = nc * (1.3 * fontPx + 10);
-      const sofBarH = !config.multiclass && showSof && fieldSof != null ? 1.1 * fontPx + 6 : 0;
+      //   row box · column header 1.7em · class header · SOF bar.
+      // Column headers are per group (under each SOF/meta bar), so count them that way.
+      const rowH = density.rowH * fontPx + density.rowGapPx;
+      const colH = 1.7 * fontPx;
+      const classH = nc * (1.35 * fontPx + 8);
+      const sofBarH = !multiclass && showSof && fieldSof != null ? 1.2 * fontPx + 6 : 0;
+      const headerGroups = Math.max(1, multiclass ? numClasses : 1);
       // Row budget comes from the user's allocated resize box, not the
       // content-hugging chrome height — otherwise shrinking the panel hides rows.
-      const fit = Math.max(1, Math.floor((allocation.h - 12 - colH - classH - sofBarH - 6) / rowH));
+      const fit = Math.max(1, Math.floor((allocation.h - 4 - headerGroups * colH - classH - sofBarH - 4) / rowH));
       setFitRows((p) => (p === fit ? p : fit));
       setFontPx((p) => (p === fontPx ? p : fontPx));
     };
@@ -341,11 +331,9 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [config.multiclass, numClasses, showSof, fieldSof, allocation.h]);
-  // Slot height (em) for one animated row, matching the `rowH` used in the fit
-  // measurement above so the absolute-positioned layout reserves the same
-  // space natural flow used to.
-  const ROWH_EM = 1.9 + 4 / fontPx;
+  }, [multiclass, numClasses, showSof, fieldSof, allocation.h, density.rowH, density.rowGapPx]);
+  // Slot pitch (em) — flush rows, no gap (Relative-matched).
+  const ROWH_EM = density.rowH + density.rowGapPx / fontPx;
 
   // App palette (blue/purple/green/red), assigned by class order — overrides
   // whatever color the sim reports, so classes read consistently. Computed from
@@ -376,31 +364,11 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
   // Build the column set.
   const cols: Col[] = [];
   cols.push({
-    id: "pos", w: "2.1em", head: "P", align: "l",
+    id: "pos", w: "2.85em", head: "POS", align: "l",
     cell: (x) => {
-      const { pos, provisional } = standingPosOf(x.car, config.multiclass, provPos, provClassPos);
+      const { pos, provisional } = standingPosOf(x.car, multiclass, provPos, provClassPos);
       if (pos == null) return <span style={{ color: t.textDim2 }}>--</span>;
-      return (
-        <span
-          title={provisional ? "Provisional — grid, qualify, or car-number order (no live session position yet)" : undefined}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            minWidth: "1.55em",
-            height: "1.55em",
-            padding: "0 0.25em",
-            borderRadius: 5,
-            background: provisional ? "transparent" : "rgba(0,0,0,0.28)",
-            boxShadow: provisional ? `inset 0 0 0 1px ${hexToRgba("#ffffff", 0.22)}` : "none",
-            fontVariantNumeric: "tabular-nums",
-            fontWeight: x.isPlayer ? 800 : 700,
-            color: x.isPlayer ? "#fff" : provisional ? t.textDim : t.text,
-          }}
-        >
-          {pos}
-        </span>
-      );
+      return <PosChip pos={pos} provisional={provisional} isPlayer={x.isPlayer} t={t} rowH={density.rowH} />;
     },
   });
   if (has.delta)
@@ -414,16 +382,15 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
     });
   if (has.car)
     cols.push({
-      // Same 1.5em base as the Relative rows; CarIcon applies its own
-      // per-brand calibration so wordmarks/wide logos don't read small.
-      id: "car", w: "2em", head: "", align: "c",
+      // Same base as Relative rows; CarIcon applies its own per-brand calibration.
+      id: "car", w: "2.2em", head: "", align: "c",
       cell: (x) => {
         // Known make → brand badge; unknown → generic iRacing badge (the column
         // itself is dropped when no car in the field has a known make).
         const ic = carIconFor(x.car.carScreenName) ?? iracingIcon;
         return (
           <span style={{ display: "flex", justifyContent: "center", alignItems: "center" }}>
-            <CarIcon src={ic} color={x.isPlayer ? "#fff" : t.text} size="1.5em" />
+            <CarIcon src={ic} color={x.isPlayer ? "#fff" : t.text} size={density.carIcon} />
           </span>
         );
       },
@@ -438,14 +405,18 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
   if (has.flag)
     cols.push({
       id: "flag", w: "1.4em", head: "", align: "c",
-      cell: (x) => <FlagSwatch country={x.car.country} />,
+      cell: (x) => (
+        <span style={{ display: "flex", height: `${density.rowH}em`, alignItems: "center", justifyContent: "center" }}>
+          <FlagSwatch country={x.car.country} />
+        </span>
+      ),
     });
   cols.push({
     id: "name", w: "minmax(6em,2fr)", head: "DRIVER", align: "l",
     cell: (x) => (
-      <span style={{ display: "flex", alignItems: "center", gap: "0.45em", overflow: "hidden", height: "1.9em", minWidth: 0, lineHeight: 1 }}>
+      <span style={{ display: "flex", alignItems: "center", gap: "0.75em", overflow: "hidden", height: `${density.rowH}em`, minWidth: 0, lineHeight: 1 }}>
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, lineHeight: 1, color: x.isPlayer ? "#fff" : t.text }}>
-          {x.car.driverName ?? `Car ${x.car.carIdx}`}
+          {formatDriverName(x.car.driverName, config.nameFormat === "short" ? "short" : "full", `Car ${x.car.carIdx}`)}
         </span>
         {x.car.onPitRoad === true && <PitBadge color={t.amber} />}
       </span>
@@ -453,14 +424,14 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
   });
   if (has.lic)
     cols.push({
-      id: "lic", w: "minmax(4.1em,1fr)", head: "SR", align: "r",
+      id: "lic", w: "minmax(4.1em,1fr)", head: "SR", align: "l",
       cell: (x) => {
         const lic = parseLicense(x.car.safetyRating);
         if (!lic) return <span />;
         // Row-height flex wrapper so the badge is centered by flex, not by the text
-        // baseline (which left it visibly high). 1.9em matches the row height.
+        // baseline (which left it visibly high).
         return (
-          <span style={{ display: "flex", height: "1.9em", alignItems: "center", justifyContent: "flex-end" }}>
+          <span style={{ display: "flex", height: `${density.rowH}em`, alignItems: "center", justifyContent: "flex-start" }}>
             <LicenseBadge letter={lic.letter} sr={lic.sr} />
           </span>
         );
@@ -468,14 +439,16 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
     });
   if (has.ir)
     cols.push({
-      id: "ir", w: "minmax(3.9em,1fr)", head: "iR", align: "r",
+      id: "ir",
+      w: "minmax(3.9em,1fr)",
+      head: "iR",
+      align: "l",
       cell: (x) => {
         const ir = x.car.irating;
         const d = x.car.iratingDelta;
-        // Two fixed slots so the iR value's right edge stays put across rows
-        // regardless of how wide the delta is — the digits read as a clean column.
+        // Rating + fixed delta slot; left-aligned so values sit under the iR header.
         return (
-          <span style={{ display: "flex", justifyContent: "flex-end", alignItems: "baseline", fontFamily: mono, fontVariantNumeric: "tabular-nums", color: t.text }}>
+          <span style={{ display: "flex", justifyContent: "flex-start", alignItems: "baseline", fontFamily: mono, fontVariantNumeric: "tabular-nums", color: t.text }}>
             <span>{ir != null ? (ir / 1000).toFixed(1) + "k" : "--"}</span>
             <span style={{ display: "inline-block", width: "1.9em", textAlign: "left", fontSize: "0.72em", marginLeft: 3, color: d == null ? "transparent" : d >= 0 ? t.gain : t.loss }}>
               {d != null ? `${d >= 0 ? "▲" : "▼"}${Math.abs(d)}` : ""}
@@ -484,8 +457,18 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
         );
       },
     });
-  cols.push({ id: "gap", w: "minmax(2.9em,1fr)", head: "GAP", align: "r", cell: (x) => (x.isFirst ? numCell("—", t.text) : x.gapToLeader == null ? numCell("--", t.textDim2) : numCell(fmtGap(x.gapToLeader), t.text)) });
-  if (config.showInterval) cols.push({ id: "int", w: "minmax(2.7em,1fr)", head: "INT", align: "r", cell: (x) => numCell(x.interval == null ? "—" : fmtGap(x.interval), t.textDim) });
+  cols.push({
+    id: "gap",
+    w: "minmax(2.9em,1fr)",
+    head: "GAP",
+    align: "r",
+    cell: (x) => {
+      if (x.gapToBest == null) return numCell("--", t.textDim2);
+      // Holds the class/session best — no delta to show.
+      if (x.gapToBest <= 0.0005) return numCell("—", t.best);
+      return numCell(`+${x.gapToBest.toFixed(3)}`, t.text);
+    },
+  });
   if (config.showLastLap) cols.push({ id: "last", w: "minmax(4.4em,1fr)", head: "LAST", align: "r", cell: (x) => numCell(fmtLapTime(x.car.lastLapS), t.textDim) });
   if (has.lapTrend)
     cols.push({
@@ -505,15 +488,15 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
     cols.push({
       id: "tyre", w: "minmax(1.8em,1fr)", head: "", align: "c",
       cell: (x) => (
-        <span style={{ display: "flex", height: "1.9em", alignItems: "center", justifyContent: "center" }}>
+        <span style={{ display: "flex", height: `${density.rowH}em`, alignItems: "center", justifyContent: "center" }}>
           <TyreBadge compound={x.car.tyre} />
         </span>
       ),
     });
 
   const template = cols.map((c) => c.w).join(" ");
-  const COLGAP = "0.6em";
-  const PADX = "0.7em";
+  const COLGAP = DRIVER_COL_GAP;
+  const ROW_PAD = driverRowPad();
   const ta = (a: Col["align"]): React.CSSProperties["textAlign"] => (a === "r" ? "right" : a === "c" ? "center" : "left");
 
   // Group by class ID (preserving first-seen order) or a single group. We key on
@@ -522,12 +505,12 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
   const groups: { id: number | null; name: string | null; color: number | null; rows: RowCtx[]; display: RowCtx[] }[] = [];
   const pushCar = (car: CarEntry) => {
     const id = car.carClassId ?? null;
-    let g = config.multiclass ? groups.find((x) => x.id === id) : groups[0];
+    let g = multiclass ? groups.find((x) => x.id === id) : groups[0];
     if (!g) {
-      g = { id: config.multiclass ? id : null, name: null, color: car.classColor, rows: [], display: [] };
+      g = { id: multiclass ? id : null, name: null, color: car.classColor, rows: [], display: [] };
       groups.push(g);
     }
-    g.rows.push({ car, pos: null, gapToLeader: null, interval: null, isFirst: false, isPlayer: car.isPlayer || car.carIdx === playerIdx, fastest: false });
+    g.rows.push({ car, pos: null, gapToBest: null, isPlayer: car.isPlayer || car.carIdx === playerIdx, fastest: false });
   };
   cars.forEach(pushCar);
 
@@ -538,24 +521,20 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
     g.rows.sort((a, b) => sortKey(a.car) - sortKey(b.car));
     const named = g.rows.map((r) => r.car.carClassName).find((n) => n && n.trim());
     const model = g.rows.map((r) => r.car.carScreenName).find((m) => m && m.trim());
-    g.name = config.multiclass ? named?.trim() || model?.trim() || `Class ${i + 1}` : null;
+    g.name = multiclass ? named?.trim() || model?.trim() || `Class ${i + 1}` : null;
   });
 
-  // Per-group: leader gap, interval, displayed position. Cars with no gap data
-  // (disconnected/towing) keep null — they show "--" rather than a fabricated 0,
-  // are excluded from the leader-gap reference, and never poison a neighbour's INT.
+  // Per-group: best-lap gap vs class best (GAP; single-class = session best)
+  // and displayed position.
   for (const g of groups) {
-    const known = g.rows.map((r) => r.car.gapToPlayerS).filter((v): v is number => v != null);
-    const leaderGap = known.length > 0 ? Math.max(...known) : null;
-    let prev: number | null = null;
-    g.rows.forEach((r, i) => {
-      const toPlayer = r.car.gapToPlayerS;
-      r.gapToLeader = leaderGap != null && toPlayer != null ? leaderGap - toPlayer : null;
-      // Interval to the row above — only when both rows have real gap data.
-      r.interval = i === 0 || r.gapToLeader == null || prev == null ? null : r.gapToLeader - prev;
-      r.isFirst = i === 0;
-      r.pos = standingPosOf(r.car, config.multiclass, provPos, provClassPos).pos;
-      prev = r.gapToLeader;
+    const classBestLap = Math.min(...g.rows.map((r) => r.car.bestLapS ?? Infinity));
+    g.rows.forEach((r) => {
+      r.gapToBest =
+        classBestLap < Infinity && r.car.bestLapS != null
+          ? r.car.bestLapS - classBestLap
+          : null;
+      r.fastest = r.car.bestLapS != null && r.car.bestLapS === classBestLap;
+      r.pos = standingPosOf(r.car, multiclass, provPos, provClassPos).pos;
     });
   }
 
@@ -584,14 +563,48 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
     counts[i] += add;
     rem -= add;
   }
-  // Pick which rows to show per class: a window around the player for their class
-  // (so you always see your battle), the leaders for the rest.
+  // Pick which rows to show per class:
+  //  - always pin the top 3 (podium / class leaders)
+  //  - fill the remaining budget with a window around the player (so you still
+  //    see your battle). Other classes (no player) just show their leaders.
+  const TOP_KEEP = 3;
   groups.forEach((g, i) => {
     const n = counts[i];
-    if (n >= g.rows.length) { g.display = g.rows; return; }
+    if (n >= g.rows.length) {
+      g.display = g.rows;
+      return;
+    }
+    if (n <= 0) {
+      g.display = [];
+      return;
+    }
+
     const pIdx = g.rows.findIndex((r) => r.isPlayer);
-    const start = pIdx >= 0 ? Math.max(0, Math.min(pIdx - Math.floor(n / 2), g.rows.length - n)) : 0;
-    g.display = g.rows.slice(start, start + n);
+    if (pIdx < 0) {
+      g.display = g.rows.slice(0, n);
+      return;
+    }
+
+    const topCount = Math.min(TOP_KEEP, n, g.rows.length);
+    const leaders = g.rows.slice(0, topCount);
+    if (n <= topCount) {
+      g.display = leaders;
+      return;
+    }
+
+    const restBudget = n - topCount;
+    const leaderIds = new Set(leaders.map((r) => r.car.carIdx));
+    const nearPool = g.rows.filter((r) => !leaderIds.has(r.car.carIdx));
+
+    if (nearPool.length <= restBudget) {
+      g.display = [...leaders, ...nearPool];
+    } else {
+      const pNear = nearPool.findIndex((r) => r.isPlayer);
+      // Player already in the top N → continue with the cars just outside it.
+      const focus = pNear >= 0 ? pNear : 0;
+      const start = Math.max(0, Math.min(focus - Math.floor(restBudget / 2), nearPool.length - restBudget));
+      g.display = [...leaders, ...nearPool.slice(start, start + restBudget)];
+    }
   });
 
   // Latest RowCtx per car (from the FULL per-group list, not just `display`), so
@@ -663,11 +676,45 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
   // The grid container must share the rows' font-size, because the column widths
   // are em-based — shrinking the header's font-size here would shrink every column
   // and slide the labels out from under their data. So keep the container at the
-  // row size and make only the label text small (on the spans).
+  // row size and make only the label text small (on an inner span).
   const header = (
-    <div style={{ display: "grid", gridTemplateColumns: template, gap: COLGAP, alignItems: "center", height: "1.6em", padding: `0 ${PADX}` }}>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: template,
+        gap: COLGAP,
+        alignItems: "center",
+        height: "1.7em",
+        padding: ROW_PAD,
+        boxSizing: "border-box",
+        background: "rgba(0, 0, 0, 0.22)",
+        boxShadow: "inset 0 -1px 0 rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.05)",
+      }}
+    >
       {cols.map((c) => (
-        <span key={c.id} style={{ fontFamily: theme.font.label, textAlign: ta(c.align), color: t.textDim, fontSize: "0.7em", fontWeight: 700, letterSpacing: "0.08em", overflow: "hidden", whiteSpace: "nowrap" }}>{c.head}</span>
+        <span
+          key={c.id}
+          style={{
+            display: "flex",
+            justifyContent: c.align === "r" ? "flex-end" : c.align === "c" ? "center" : "flex-start",
+            alignItems: "baseline",
+            overflow: "hidden",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <span
+            style={{
+              fontFamily: theme.font.label,
+              color: t.textDim,
+              fontSize: "0.78em",
+              fontWeight: 800,
+              letterSpacing: "0.1em",
+              ...(c.id === "pos" ? { paddingLeft: META_PAD_L } : null),
+            }}
+          >
+            {c.head}
+          </span>
+        </span>
       ))}
     </div>
   );
@@ -676,8 +723,12 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
     return <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center", color: t.textDim, fontSize: "0.85em" }}>No field data</div>;
   }
 
-  const showSofBar = !config.multiclass && showSof && fieldSof != null;
-  const contentHeightPx = Math.min(standingsContentHeightPx(groups, rowsByGroup, fontPx, config.multiclass, showSofBar), allocation.h);
+  const showSofBar = !multiclass && showSof && fieldSof != null;
+  // Visible vs full roster for the single-class "N OF M" chip.
+  const singleGroup = !multiclass ? groups[0] : null;
+  const shownCount = singleGroup?.display.length ?? cars.length;
+  const totalCount = singleGroup?.rows.length ?? cars.length;
+  const contentHeightPx = Math.min(standingsContentHeightPx(groups, rowsByGroup, fontPx, multiclass, showSofBar, density), allocation.h);
 
   return (
     <div
@@ -688,20 +739,11 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
         maxHeight: "100%",
         overflow: "hidden",
         color: t.text,
-        padding: "6px 10px",
+        padding: 0,
         boxSizing: "border-box",
-        fontSize: "0.92em",
+        fontSize: `${density.font}em`,
       }}
     >
-      {header}
-      {!config.multiclass && showSofBar && (
-        <div style={{ display: "flex", alignItems: "center", gap: 7, padding: `0 ${PADX}`, margin: "4px 0 2px", height: "1.1em", boxSizing: "content-box" }}>
-          <SofValue value={fieldSof} theme={theme} mono={mono} t={t} />
-          <span style={{ fontFamily: theme.font.label, marginLeft: "auto", fontSize: "0.68em", color: t.text, letterSpacing: "0.06em", fontWeight: 800, fontVariantNumeric: "tabular-nums", opacity: 0.92 }}>
-            {cars.length} CARS
-          </span>
-        </div>
-      )}
       {groups.map((g) => {
         const key = String(g.id ?? "all");
         const rows = rowsByGroup.get(key) ?? [];
@@ -712,18 +754,28 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
         const boxRows = Math.max(g.display.length, rows.length);
         return (
           <div key={g.id ?? "all"}>
-            {config.multiclass && g.name && (
-              <div style={{ display: "flex", alignItems: "center", gap: 7, padding: `0 ${PADX}`, margin: "7px 0 3px", height: "1.3em", boxSizing: "content-box" }}>
-                <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.74em", letterSpacing: "0.04em", color: "#0a0b0e", padding: "1px 7px", borderRadius: 5, background: classColorOf(ccol, g.id) }}>{g.name}</span>
+            {/* Meta (SOF / class / driver count) sits above the column headers;
+                headers sit directly on top of this group's sunken row trough. */}
+            {multiclass && g.name ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: `6px ${density.padR} 4px ${META_PAD_L}`, height: "1.35em", boxSizing: "content-box" }}>
+                <span style={{ fontFamily: theme.font.label, fontWeight: 800, fontSize: "0.82em", letterSpacing: "0.04em", color: "#0a0b0e", padding: "2px 8px", borderRadius: 4, background: classColorOf(ccol, g.id) }}>{g.name}</span>
                 {showSof && sofByClass.get(g.id ?? null) != null && (
                   <SofValue value={sofByClass.get(g.id ?? null)!} theme={theme} mono={mono} t={t} />
                 )}
-                <span style={{ fontFamily: theme.font.label, marginLeft: "auto", fontSize: "0.68em", color: t.text, letterSpacing: "0.06em", fontWeight: 800, fontVariantNumeric: "tabular-nums", opacity: 0.92 }}>
+                <span style={{ fontFamily: theme.font.label, marginLeft: "auto", fontSize: "0.78em", color: t.text, letterSpacing: "0.06em", fontWeight: 800, fontVariantNumeric: "tabular-nums", opacity: 0.92 }}>
                   {g.display.length < g.rows.length ? `${g.display.length} OF ${g.rows.length}` : `${g.rows.length} CARS`}
                 </span>
               </div>
-            )}
-            <div style={{ position: "relative", height: boxRows ? `${boxRows * ROWH_EM}em` : 0 }}>
+            ) : showSofBar ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: `5px ${density.padR} 4px ${META_PAD_L}`, height: "1.2em", boxSizing: "content-box" }}>
+                <SofValue value={fieldSof} theme={theme} mono={mono} t={t} />
+                <span style={{ fontFamily: theme.font.label, marginLeft: "auto", fontSize: "0.78em", color: t.text, letterSpacing: "0.06em", fontWeight: 800, fontVariantNumeric: "tabular-nums", opacity: 0.92 }}>
+                  {shownCount < totalCount ? `${shownCount} OF ${totalCount}` : `${totalCount} CARS`}
+                </span>
+              </div>
+            ) : null}
+            {header}
+            <DriverListTrough slots={boxRows} rowH={ROWH_EM}>
               {rows.map((r) => {
                 const x = carDataRef.current.get(r.carIdx);
                 if (!x) return null;
@@ -736,18 +788,15 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
                     exiting={r.exiting}
                     rowh={ROWH_EM}
                     template={template}
-                    colgap={COLGAP}
-                    padx={PADX}
                     cols={cols}
                     ta={ta}
-                    ccol={ccol}
                     t={t}
                     highlight={highlight}
                     onExited={(carIdx) => handleExited(key, carIdx)}
                   />
                 );
               })}
-            </div>
+            </DriverListTrough>
           </div>
         );
       })}
@@ -757,31 +806,34 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
 
 // Narrowest box (design px, scale 1) that fits the columns the given config
 // enables, so the grid never overflows/clips. The em-widths mirror the column
-// template built in <Standings> above; rows render at the root's 0.92em of the
-// 14px base, hence EM = 0.92 × 14. The data-driven delta/number columns are
+// template built in <Standings> above; rows render at density.font of the
+// 14px base. The data-driven delta/number columns are
 // assumed present (they almost always are) so the floor stays safe.
 function standingsMinWidth(config: StandingsConfig): number {
-  const EM = 0.92 * 14;
-  const colEms = [2.1, 1.8, 2.3]; // pos · delta · number
-  if (config.showCarIcon) colEms.push(2);
+  const d = standingsDensity(!!config.compact);
+  const EM = d.font * 14;
+  const colEms = [2.85, 1.8, 2.3]; // pos · delta · number
+  if (config.showCarIcon) colEms.push(2.2);
   if (config.showFlag) colEms.push(1.4);
   colEms.push(6); // driver name (minmax(6em,…) lower bound)
   if (config.showLicense) colEms.push(4.1);
   if (config.showIrating) colEms.push(3.9);
   colEms.push(2.9); // gap
-  if (config.showInterval) colEms.push(2.7);
   if (config.showLastLap) colEms.push(4.4);
   if (config.showBest) colEms.push(4.4);
   if (config.showTyre) colEms.push(1.8);
-  const sumEm = colEms.reduce((a, b) => a + b, 0) + 0.6 * (colEms.length - 1) /* col gaps */ + 1.4 /* 0.7em PADX ×2 */;
-  return Math.ceil(sumEm * EM + 10 /* 5px root padding ×2 */);
+  const padEm = parseFloat(d.padL) + parseFloat(d.padR);
+  // Flush to panel edges (no root pad); col gap matches COLGAP in the grid.
+  // Flush to panel edges (no root pad); col gap matches shared DRIVER_COL_GAP.
+  const sumEm = colEms.reduce((a, b) => a + b, 0) + parseFloat(DRIVER_COL_GAP) * (colEms.length - 1) + padEm;
+  return Math.ceil(sumEm * EM);
 }
 
 export const standingsDef: WidgetDefinition<StandingsConfig> = {
   id: "standings",
   name: "Standings",
-  defaultSize: { w: 660, h: 345 },
-  minSize: { w: 320, h: 140 },
+  defaultSize: { w: 860, h: 420 },
+  minSize: { w: 360, h: 160 },
   minContentWidth: standingsMinWidth,
   hugContentHeight: true,
   defaultConfig,
@@ -789,9 +841,8 @@ export const standingsDef: WidgetDefinition<StandingsConfig> = {
   requiredCapabilities: ["relativeGaps"],
   configSchema: [
     { key: "maxRows", label: "Max rows", type: "number", min: 3, max: 30, step: 1 },
-    { key: "multiclass", label: "Group by class", type: "boolean" },
     { key: "myClassOnly", label: "My class only", type: "boolean" },
-    { key: "showInterval", label: "Interval", type: "boolean" },
+    { key: "compact", label: "Compact", type: "boolean" },
     { key: "showLastLap", label: "Last lap", type: "boolean" },
     { key: "showBest", label: "Best lap", type: "boolean" },
     { key: "showIrating", label: "iRating", type: "boolean" },
@@ -799,6 +850,15 @@ export const standingsDef: WidgetDefinition<StandingsConfig> = {
     { key: "showLicense", label: "License", type: "boolean" },
     { key: "showTyre", label: "Tyre", type: "boolean" },
     { key: "showCarIcon", label: "Car icon", type: "boolean" },
+    {
+      key: "nameFormat",
+      label: "Driver names",
+      type: "enum",
+      options: [
+        { value: "full", label: "First Last" },
+        { value: "short", label: "F. Last" },
+      ],
+    },
   ],
   Component: Standings,
 };

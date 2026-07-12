@@ -104,6 +104,12 @@ export interface BaseWidgetProps<C = Record<string, unknown>> {
   size: { w: number; h: number };
   /** User-resized allocation — can be taller than `size` when the panel hugs content. */
   allocatedSize?: { w: number; h: number };
+  /**
+   * Panel background alpha (0..1) — the same value WidgetHost uses for chrome.
+   * Self-painting widgets (`transparentPanel`) must apply this to their own
+   * surfaces so they match host-painted panels (Standings, etc.).
+   */
+  panelOpacity?: number;
 }
 
 export interface WidgetDefinition<C = Record<string, unknown>> {
@@ -144,6 +150,12 @@ export interface WidgetDefinition<C = Record<string, unknown>> {
    * freed space. `defaultSize.h` should equal `contentHeight(defaultConfig)`.
    */
   contentHeight?: (config: C) => number;
+  /**
+   * When set with `contentHeight`, the box height is locked to
+   * `contentHeight(config)` × scale (min and max). For fixed-slot widgets
+   * (Relative) where height must match the configured ahead/behind grid.
+   */
+  clampHeightToContent?: boolean;
   /**
    * Panel chrome hugs measured content height instead of always filling the
    * allocated resize box. For row-budget widgets (Standings) whose visible height

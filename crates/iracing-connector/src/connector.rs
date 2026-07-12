@@ -489,14 +489,12 @@ impl SectorTimer {
 /// Free function (not a method) so the caller can hold `&self.map` and
 /// `&mut self.scratch` as disjoint borrows of the connector at the same time.
 fn fill_latest_buffer(map: &MappedFile, scratch: &mut Vec<u8>) -> Option<i64> {
-    let mut last_tick = 0i32;
     for _ in 0..4 {
         let h = Header::parse(map.slice(0, HEADER_LEN)?)?;
         if h.buf_len == 0 {
             return None;
         }
         let vb = *h.latest_buf();
-        last_tick = vb.tick_count;
 
         // Bounds come from the sim-written header; `slice` validates them
         // against the mapped view, so a torn/garbage header fails the poll
@@ -510,8 +508,18 @@ fn fill_latest_buffer(map: &MappedFile, scratch: &mut Vec<u8>) -> Option<i64> {
             return Some(vb.tick_count as i64);
         }
     }
-    // Gave up after retries; return best-effort copy.
-    Some(last_tick as i64)
+    // The data changed underneath every copy attempt. Do not expose a mixed
+    // frame: the reference SDK treats this as "no new data" and retries on the
+    // next poll.
+    None
+}
+
+/// Read the freshest buffer tick without copying the row. This mirrors the
+/// reference SDK's pre-wait `irsdk_getNewData` check so a frame that is already
+/// available is consumed immediately instead of waiting on the shared event.
+fn latest_buffer_tick(map: &MappedFile) -> Option<i64> {
+    let header = Header::parse(map.slice(0, HEADER_LEN)?)?;
+    Some(header.latest_buf().tick_count as i64)
 }
 
 // SAFETY: `MappedFile` holds a raw pointer into the mapped region, which makes
@@ -560,6 +568,7 @@ impl IRacingConnector {
         self.prev_fuel = None;
         self.prev_flags = 0;
         self.messages.clear();
+        self.sector_timer = SectorTimer::default();
         self.reference_laps.reset();
         self.lap_history.reset();
         self.start_positions.clear();
@@ -849,15 +858,35 @@ impl SimConnector for IRacingConnector {
     }
 
     fn connect(&mut self) -> Result<(), ConnectError> {
+        // Drop a stale handle before reopening the named mapping. Keeping even
+        // one client handle alive keeps the old kernel mapping object alive
+        // after iRacing exits, causing OpenFileMappingW to reopen stale memory.
+        self.map.take();
         let map = MappedFile::open(MEM_MAP_NAME, DATA_VALID_EVENT_NAME)?;
+        let connected = map
+            .slice(0, HEADER_LEN)
+            .and_then(Header::parse)
+            .is_some_and(|header| header.status & STATUS_CONNECTED != 0);
+        if !connected {
+            return Err(ConnectError::NotRunning);
+        }
         self.map = Some(map);
         // Force a var-map/YAML rebuild on the next poll.
         self.last_session_update = i32::MIN;
+        self.last_emitted_tick = None;
+        self.prev_session_num = None;
+        self.prev_session_unique_id = None;
+        self.var_map.clear();
+        self.session_min = SessionInfoMin::default();
+        self.reset_session_state();
         Ok(())
     }
 
     fn is_connected(&self) -> bool {
-        self.map.is_some()
+        self.map
+            .as_ref()
+            .and_then(|map| Header::parse(map.slice(0, HEADER_LEN)?))
+            .is_some_and(|header| header.status & STATUS_CONNECTED != 0)
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -878,7 +907,7 @@ impl SimConnector for IRacingConnector {
             sectors: true,       // computed from LapDistPct crossings + YAML boundaries
             car_setup: true,     // dcBrakeBias/BrakeABSactive/dcTractionControlToggle/cold pressures (car-dependent)
             spectator: true,     // CamCarIdx
-            pit_info: true,      // TrackPitSpeedLimit (YAML) + derived pit-box dist + CarIdxPitStopStatus
+            pit_info: true,      // TrackPitSpeedLimit (YAML) + pit-box dist + CarIdxOnPitRoad
         }
     }
 
@@ -890,10 +919,21 @@ impl SimConnector for IRacingConnector {
         // polling below, which must not re-emit a frame the sim hasn't
         // actually advanced (audit B4) — ~200 Hz of identical frames would
         // otherwise flood IPC/React.
-        let wait_result = map.wait_for_data(WAIT_TIMEOUT_MS);
+        // The named data event is auto-reset and shared by every SDK client.
+        // Check the tick before sleeping so another client consuming the event
+        // cannot make us wait despite a fresh frame already being available.
+        let frame_already_ready = latest_buffer_tick(map)
+            .is_some_and(|tick| self.last_emitted_tick != Some(tick));
+        let wait_result = if frame_already_ready {
+            WaitResult::Signaled
+        } else {
+            map.wait_for_data(WAIT_TIMEOUT_MS)
+        };
         match wait_result {
             WaitResult::Signaled => {}
-            WaitResult::Timeout => return None,
+            // Always check the tick after waiting. Another SDK client may have
+            // consumed the shared event even though the buffers advanced.
+            WaitResult::Timeout => {}
             WaitResult::NoEvent => {
                 // No event handle: avoid a hot spin while still staying current.
                 std::thread::sleep(std::time::Duration::from_millis(5));
@@ -909,6 +949,7 @@ impl SimConnector for IRacingConnector {
 
         // In the menus / between sessions the connected bit is clear.
         if header.status & STATUS_CONNECTED == 0 {
+            self.map = None;
             return None;
         }
 
@@ -971,10 +1012,9 @@ impl SimConnector for IRacingConnector {
         let map = self.map.as_ref()?;
         let sim_tick = fill_latest_buffer(map, &mut self.scratch)?;
 
-        // No-event fallback polling: if the sim hasn't advanced past the last
-        // frame we emitted, skip building/emitting a duplicate snapshot
-        // instead of re-sending it at the ~200 Hz sleep-loop rate (audit B4).
-        if wait_result == WaitResult::NoEvent && self.last_emitted_tick == Some(sim_tick) {
+        // Every wait path can wake without a new frame (including a signal
+        // consumed by another SDK client), so never emit the same tick twice.
+        if self.last_emitted_tick == Some(sim_tick) {
             return None;
         }
 
@@ -1016,6 +1056,7 @@ impl SimConnector for IRacingConnector {
             self.prev_fuel = None;
             self.prev_flags = 0;
             self.messages.clear();
+            self.sector_timer = SectorTimer::default();
             self.reference_laps.reset();
             self.lap_history.reset();
             self.start_positions.clear();
@@ -1444,7 +1485,10 @@ impl SimConnector for IRacingConnector {
                     safety_rating: d.license.clone(),
                     rel_lat_m: None,
                     rel_lon_m: None,
-                    pit_status: u32_at(vm, buf, "CarIdxPitStopStatus", i),
+                    // iRacing has no `CarIdxPitStopStatus`; its detailed pit
+                    // service bitfield is player-only. Preserve a useful
+                    // per-car status from the real `CarIdxOnPitRoad` array.
+                    pit_status: bool_at(vm, buf, "CarIdxOnPitRoad", i).map(u32::from),
                     has_session_fastest: None,
                     rolling_lap_avg_s: rolling_avg,
                     lap_delta_vs_avg_s: lap_delta,
@@ -1950,6 +1994,9 @@ mod tests {
             text: "Yellow flag — caution".to_string(),
             priority: 20,
         });
+        c.sector_timer.set_starts(&[0.0, 0.3, 0.7]);
+        c.sector_timer.best_lap_times = vec![Some(30.0), Some(31.0), Some(32.0)];
+        c.sector_timer.session_best_times = vec![Some(29.0), Some(30.0), Some(31.0)];
 
         c.reset_session_state();
 
@@ -1958,5 +2005,8 @@ mod tests {
         assert_eq!(c.prev_fuel, None);
         assert_eq!(c.prev_flags, 0);
         assert!(c.messages.is_empty());
+        assert!(c.sector_timer.starts.is_empty());
+        assert!(c.sector_timer.best_lap_times.is_empty());
+        assert!(c.sector_timer.session_best_times.is_empty());
     }
 }

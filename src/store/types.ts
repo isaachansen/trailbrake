@@ -75,7 +75,7 @@ export interface CarEntry {
 
   // Richer fields (mock provides; live sims fill what they can, else null).
   carNumber: string | null;
-  /** 2-letter country code for the flag swatch. */
+  /** Country / region code for the flag swatch (e.g. "US", "GB-ENG"). */
   country: string | null;
   /** Positions gained (+) / lost (−) since the start. */
   positionsGained: number | null;

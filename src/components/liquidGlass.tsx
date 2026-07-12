@@ -1,26 +1,24 @@
-// "Liquid Glass" panel chrome — an opt-in alternative to the flat-glass theme,
-// applied to every widget panel when the user picks it (Settings → Panel style).
+// Shared panel surface — ONE paint path for WidgetHost and self-chrome widgets
+// (Relative sections, Spotter card, …). Same alpha in → same look out.
 //
-// Layers (Apple iOS-26 style): a refraction of whatever is behind the panel
-// (SVG feTurbulence + feDisplacementMap used as a backdrop-filter), a frosted
-// blur+saturate, a translucent tint, a bright specular highlight, and an inset
-// rim that catches light. The SVG-filter backdrop only works in Chromium —
-// WebView2 (the desktop overlay) and Chrome (dev) — which is all we ship.
+// Liquid Glass layers: frosted blur + translucent tint + specular rim. The SVG
+// refraction filter is intentionally NOT applied here — it only works reliably
+// on untransformed hosts, and Relative's sections live inside FitContent's
+// `transform: scale(...)`, where refraction also broke sibling backdrop-filters
+// in WebView2. Blur-only keeps every panel visually locked together.
 
 import type { CSSProperties } from "react";
+import type { Theme } from "../theme/theme";
 
 export const GLASS_FILTER_ID = "lg-refract";
-export const GLASS_RADIUS = 22;
+export const GLASS_RADIUS = 12;
 export const GLASS_SHADOW =
   "0 10px 44px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3), " +
-  "inset 0 1px 0 rgba(255,255,255,0.6), inset 0 0 0 1px rgba(255,255,255,0.08), " +
-  "inset 0 -10px 28px rgba(255,255,255,0.045)";
-export const GLASS_BORDER = "1px solid rgba(255,255,255,0.22)";
+  "inset 0 1px 0 rgba(255,255,255,0.28), inset 0 0 0 1px rgba(255,255,255,0.05), " +
+  "inset 0 -10px 28px rgba(255,255,255,0.02)";
+export const GLASS_BORDER = "1px solid rgba(255,255,255,0.14)";
 
-/**
- * Inject once per window (overlay + manager). A hidden, zero-size SVG holding the
- * refraction filter that `glassChrome` references. Cheap when unused.
- */
+/** Kept for the gallery / future experiments — not referenced by `glassChrome`. */
 export function LiquidGlassFilter() {
   return (
     <svg width="0" height="0" aria-hidden style={{ position: "absolute", pointerEvents: "none" }}>
@@ -33,33 +31,46 @@ export function LiquidGlassFilter() {
   );
 }
 
-/** Liquid-glass panel surface. `alpha` (0..1) scales the fill so the per-widget
- *  opacity control still dims the panel.
- *
- *  Legibility over busy/bright sim backgrounds comes from two things: a **dark
- *  translucent base** under the glass (so content always has contrast) and a
- *  **strong frosted blur** (so the scene behind reads as a soft wash, not detail
- *  competing with the text). The white sheen + rim sit on top for the glass look. */
+/** Liquid-glass fill. `alpha` (0..1) is the user's panel opacity setting. */
 export function glassChrome(alpha = 1): CSSProperties {
   const a = Math.max(0, Math.min(1, alpha));
   return {
     background:
-      // top-light sheen (glass)…
-      `linear-gradient(180deg, rgba(255,255,255,${0.1 * a}), rgba(255,255,255,0) 40%), ` +
-      `linear-gradient(160deg, rgba(255,255,255,${0.05 * a}), rgba(255,255,255,${0.015 * a})), ` +
-      // …over a dark base for readability.
-      `rgba(13,15,21,${0.62 * a})`,
+      `linear-gradient(180deg, rgba(255,255,255,${0.045 * a}), rgba(255,255,255,0) 36%), ` +
+      `linear-gradient(160deg, rgba(255,255,255,${0.022 * a}), rgba(255,255,255,${0.008 * a})), ` +
+      `rgba(13,15,21,${0.72 * a})`,
     border: GLASS_BORDER,
     borderRadius: GLASS_RADIUS,
     boxShadow: GLASS_SHADOW,
-    // Heavier blur + no brightness boost so bright scenes don't wash out the text.
-    backdropFilter: `blur(10px) saturate(150%) url(#${GLASS_FILTER_ID})`,
-    WebkitBackdropFilter: `blur(10px) saturate(150%) url(#${GLASS_FILTER_ID})`,
+    backdropFilter: "blur(10px) saturate(150%)",
+    WebkitBackdropFilter: "blur(10px) saturate(150%)",
   };
 }
 
-/** Specular "light catch" — place inside the panel (behind the content, which
- *  should sit at zIndex ≥ 1 so text stays crisp). */
+/** Flat or liquid panel surface — identical whether painted by WidgetHost or a
+ *  self-chrome widget. Pass the same `alpha` and they match. */
+export function panelChrome(theme: Theme, glass: boolean, alpha = 1): CSSProperties {
+  const a = Math.max(0, Math.min(1, alpha));
+  if (glass) {
+    return {
+      ...glassChrome(a),
+      position: "relative",
+      overflow: "hidden",
+    };
+  }
+  return {
+    background: `rgba(18, 20, 27, ${a})`,
+    border: `1px solid ${theme.colors.surfaceBorder}`,
+    borderRadius: theme.radius,
+    backdropFilter: theme.panelBlur,
+    WebkitBackdropFilter: theme.panelBlur,
+    boxShadow: theme.panelShadow,
+    position: "relative",
+    overflow: "hidden",
+  };
+}
+
+/** Specular "light catch" — place inside the panel (content at zIndex ≥ 1). */
 export function GlassSpecular({ radius = GLASS_RADIUS }: { radius?: number }) {
   return (
     <div
@@ -70,7 +81,7 @@ export function GlassSpecular({ radius = GLASS_RADIUS }: { radius?: number }) {
         pointerEvents: "none",
         zIndex: 0,
         background:
-          "radial-gradient(120% 75% at 24% -14%, rgba(255,255,255,0.22), rgba(255,255,255,0.04) 32%, transparent 54%)",
+          "radial-gradient(120% 75% at 24% -14%, rgba(255,255,255,0.09), rgba(255,255,255,0.02) 32%, transparent 54%)",
       }}
     />
   );

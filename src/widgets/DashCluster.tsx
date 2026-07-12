@@ -215,7 +215,7 @@ function DashCluster({ theme, config, caps, size }: BaseWidgetProps<DashClusterC
             alignItems: "center",
             justifyContent: "center",
             background: t.cell,
-            borderRadius: 16,
+            borderRadius: 8,
             boxSizing: "border-box",
             overflow: "hidden",
           }}

@@ -296,7 +296,7 @@ function InputGraph({ theme, config }: BaseWidgetProps<InputGraphConfig>) {
 export const inputGraphDef: WidgetDefinition<InputGraphConfig> = {
   id: "input-graph",
   name: "Inputs",
-  defaultSize: { w: 380, h: 236 },
+  defaultSize: { w: 520, h: 236 },
   minSize: { w: 220, h: 150 },
   defaultConfig,
   // Height tracks which stacked sections are on (design px @ scale 1): a base

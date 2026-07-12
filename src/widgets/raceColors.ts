@@ -1,5 +1,5 @@
 // Visual lookups for the rich standings/relative rows, ported from the v2 design.
-// Flags are CSS gradients (cheap, no image assets); license + tyre are solid swatches.
+// License + tyre are solid swatches. Country flags use flag-icons (see FlagSwatch).
 
 /** Preset gear-text colors offered by gear widgets (white default + red/yellow/
  *  green), alongside a custom color picker. Shared so the choices don't drift. */
@@ -9,22 +9,6 @@ export const GEAR_COLOR_PRESETS: { hex: string; name: string }[] = [
   { hex: "#ffd84d", name: "Yellow" },
   { hex: "#3ddc84", name: "Green" },
 ];
-
-/** Country code → flag gradient. Unknown codes fall back to a neutral swatch. */
-export const FLAG: Record<string, string> = {
-  FR: "linear-gradient(90deg,#23379b 0 34%,#fff 34% 67%,#e23 67%)",
-  DK: "linear-gradient(90deg,#c60c30 0 38%,#fff 38% 56%,#c60c30 56%)",
-  IT: "linear-gradient(90deg,#1a8a3f 0 34%,#fff 34% 67%,#cd2b34 67%)",
-  GB: "linear-gradient(135deg,#012169 0 40%,#fff 40% 52%,#c8102e 52% 64%,#012169 64%)",
-  BE: "linear-gradient(90deg,#1a1a1a 0 34%,#fae042 34% 67%,#ed2939 67%)",
-  DE: "linear-gradient(180deg,#1a1a1a 0 34%,#dd0000 34% 67%,#ffce00 67%)",
-  NL: "linear-gradient(180deg,#ae1c28 0 34%,#fff 34% 67%,#21468b 67%)",
-  ES: "linear-gradient(180deg,#aa151b 0 28%,#f1bf00 28% 72%,#aa151b 72%)",
-  SE: "linear-gradient(90deg,#006aa7 0 38%,#fecc00 38% 56%,#006aa7 56%)",
-  BR: "linear-gradient(135deg,#009b3a 0 38%,#ffdf00 38% 62%,#009b3a 62%)",
-  JP: "radial-gradient(circle at 50% 50%,#bc002d 0 34%,#fff 36%)",
-  US: "linear-gradient(180deg,#b22234 0 25%,#fff 25% 50%,#b22234 50% 75%,#3c3b6e 75%)",
-};
 
 /** License class letter → badge color. */
 export const LIC: Record<string, string> = {
@@ -83,25 +67,6 @@ export function classColorMap(cars: { carClassId: number | null; bestLapS: numbe
 /** Palette color for a class id (falls back to the first palette color). */
 export function classColorOf(map: Map<number, string>, classId: number | null | undefined): string {
   return map.get(classId ?? -1) ?? CLASS_PALETTE[0];
-}
-
-export function flagOf(country: string | null | undefined): string {
-  if (!country) return "rgba(255,255,255,0.12)";
-  return FLAG[country.toUpperCase()] ?? "rgba(255,255,255,0.12)";
-}
-
-/** True when we have a hand-tuned CSS gradient for this country code. */
-export function hasFlagGradient(country: string | null | undefined): boolean {
-  return !!country && country.toUpperCase() in FLAG;
-}
-
-/** ISO 3166-1 alpha-2 → regional-indicator emoji (🇺🇸 etc.). */
-export function flagEmoji(country: string | null | undefined): string | null {
-  if (!country) return null;
-  const cc = country.toUpperCase();
-  if (!/^[A-Z]{2}$/.test(cc)) return null;
-  const A = 0x1f1e6;
-  return String.fromCodePoint(A + (cc.charCodeAt(0) - 65), A + (cc.charCodeAt(1) - 65));
 }
 
 /** Split a license string like "A 3.99" into its letter and SR number. */

@@ -217,9 +217,6 @@ function SectorDelta({ theme, config }: BaseWidgetProps<SectorDeltaConfig>) {
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: theme.widgetPad, boxSizing: "border-box", overflow: "hidden", gap: theme.space.md }}>
-      <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center" }}>
-        <span style={{ fontFamily: theme.font.label, fontWeight: 700, fontSize: "0.78em", letterSpacing: "0.1em" }}>SECTOR DELTA</span>
-      </div>
       <div style={{ flex: "1 1 auto", display: "flex", flexDirection: "column", justifyContent: "center", gap: theme.space.md, minHeight: 0 }}>
         {SECTOR_KEYS.map((_, i) => row(i))}
       </div>

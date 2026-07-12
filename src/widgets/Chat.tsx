@@ -4,7 +4,6 @@
 
 import { useSlow } from "../store/hooks";
 import { useScreenLayer } from "../components/screenLayer";
-import { WidgetTitle } from "./WidgetTitle";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
 
 export interface ChatConfig {
@@ -43,9 +42,6 @@ function Chat({ theme, config }: BaseWidgetProps<ChatConfig>) {
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: theme.widgetPad, boxSizing: "border-box", overflow: "hidden" }}>
-      <div style={{ marginBottom: theme.space.sm }}>
-        <WidgetTitle title="Chat" theme={theme} />
-      </div>
       <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", justifyContent: messages.length === 0 ? "flex-start" : "flex-end", gap: 8 }}>
         {messages.length === 0 ? (
           <span style={{ fontFamily: theme.font.label, fontSize: "0.72em", color: t.textDim2, letterSpacing: "0.04em" }}>No chat connected</span>

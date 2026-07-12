@@ -86,14 +86,32 @@ function minSizePx(inst: WidgetInstance, defaults: OverlayDefaults): { w: number
   if (!def) return { w: 60, h: 40 };
   const scale = scaleOf(inst, defaults);
   const baseW = def.minContentWidth?.(inst.config as any) ?? def.minSize.w;
-  return { w: Math.ceil(baseW * scale), h: Math.ceil(def.minSize.h * scale) };
+  // Slot-grid widgets lock height to content — min == contentHeight so a short
+  // saved box can't starve the configured ahead/behind seats.
+  const baseH =
+    def.clampHeightToContent && def.contentHeight
+      ? def.contentHeight(inst.config as never)
+      : def.minSize.h;
+  return { w: Math.ceil(baseW * scale), h: Math.ceil(baseH * scale) };
 }
 
-/** Grow `inst`'s box up to its minimum if it's smaller; otherwise return as-is. */
+/** Tallest box (real px) allowed for widgets that lock height to content. */
+function maxSizePx(inst: WidgetInstance, defaults: OverlayDefaults): { h: number } | null {
+  const def = getWidgetDef(inst.type);
+  if (!def?.clampHeightToContent || !def.contentHeight) return null;
+  const scale = scaleOf(inst, defaults);
+  return { h: Math.ceil(def.contentHeight(inst.config as never) * scale) };
+}
+
+/** Grow `inst`'s box up to its minimum (and down to its content max) if needed. */
 function clampSize(inst: WidgetInstance, defaults: OverlayDefaults): WidgetInstance {
   const min = minSizePx(inst, defaults);
-  if (inst.size.w >= min.w && inst.size.h >= min.h) return inst;
-  return { ...inst, size: { w: Math.max(inst.size.w, min.w), h: Math.max(inst.size.h, min.h) } };
+  const max = maxSizePx(inst, defaults);
+  let w = Math.max(inst.size.w, min.w);
+  let h = Math.max(inst.size.h, min.h);
+  if (max) h = Math.min(h, Math.max(min.h, max.h));
+  if (w === inst.size.w && h === inst.size.h) return inst;
+  return { ...inst, size: { w, h } };
 }
 
 /** True when v is a finite number — guards persisted JSON against NaN/strings. */
@@ -461,6 +479,11 @@ export const layoutStore = {
   /** Smallest box (real px) this widget can occupy without squishing — see `minSizePx`. */
   minSizeFor(inst: WidgetInstance): { w: number; h: number } {
     return minSizePx(inst, state.defaults);
+  },
+
+  /** Tallest box (real px) when the widget locks height to content; null if uncapped. */
+  maxSizeFor(inst: WidgetInstance): { h: number } | null {
+    return maxSizePx(inst, state.defaults);
   },
 
   resetConfig(id: string) {

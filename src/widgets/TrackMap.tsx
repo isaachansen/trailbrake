@@ -408,12 +408,11 @@ function TrackMap({ theme, config }: BaseWidgetProps<TrackMapConfig>) {
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", color: t.text, padding: theme.widgetPad, boxSizing: "border-box" }}>
       <div style={{ marginBottom: theme.space.sm }}>
         <WidgetTitle
-          title="Track Map"
           theme={theme}
           right={<span ref={nameRef} style={{ fontFamily: theme.font.label, fontWeight: 600, fontSize: "0.62em", letterSpacing: "0.06em", color: t.textDim2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, textAlign: "right" }} />}
         />
       </div>
-      <div style={{ flex: 1, minHeight: 0, position: "relative", background: "rgba(255,255,255,0.03)", borderRadius: 11, overflow: "hidden" }}>
+      <div style={{ flex: 1, minHeight: 0, position: "relative", background: "rgba(255,255,255,0.03)", borderRadius: 7, overflow: "hidden" }}>
         <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
       </div>
     </div>

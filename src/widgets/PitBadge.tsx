@@ -17,8 +17,8 @@ export function PitBadge({ color }: { color: string }) {
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        height: "1.35em",
-        padding: "0 0.45em",
+        height: "1.1em",
+        padding: "0 0.4em",
         boxSizing: "border-box",
         borderRadius: 4,
         background: color,
@@ -28,8 +28,9 @@ export function PitBadge({ color }: { color: string }) {
     >
       <span
         style={{
+          display: "block",
           fontFamily: LABEL,
-          fontSize: "0.7em",
+          fontSize: "0.72em",
           fontWeight: 800,
           letterSpacing: "0.07em",
           // letter-spacing adds a trailing gap after the final "T"; indent by the
@@ -37,8 +38,6 @@ export function PitBadge({ color }: { color: string }) {
           textIndent: "0.07em",
           color: "#0a0b0e",
           lineHeight: 1,
-          // Caps-only glyphs sit optically high in the em box; nudge down a hair.
-          transform: "translateY(0.06em)",
         }}
       >
         PIT

@@ -493,17 +493,16 @@ fn flush_result_entry(
     cur_pos: &mut Option<u32>,
     cur_class: &mut Option<u32>,
 ) {
-    // `Position: 0` means "not ranked yet" (common in early practice) — omit so
-    // the connector can fall through to car-number order instead of shipping a
-    // zero that `sanitizeSlow` later turns into null/`--`.
-    //
-    // YAML `ClassPosition` is 0-based (irDashies / iRacing session string);
-    // live `CarIdxClassPosition` is 1-based. Normalize to 1-based here.
+    // YAML `Position` and `ClassPosition` are 0-based; live `CarIdxPosition`
+    // and `CarIdxClassPosition` are 1-based. Normalize both YAML fields here so
+    // the leader (`Position: 0`) is retained as P1.
     if let (Some(sn), Some(ci), Some(p)) = (session_num, cur_car.take(), cur_pos.take()) {
         let raw_class = cur_class.take();
-        if p > 0 {
-            let cp = raw_class.map(|c| c + 1).unwrap_or(p);
-            out.insert((sn, ci), (p, cp));
+        if let Some(position) = p.checked_add(1) {
+            let class_position = raw_class
+                .and_then(|class| class.checked_add(1))
+                .unwrap_or(position);
+            out.insert((sn, ci), (position, class_position));
         }
     } else {
         *cur_car = None;
@@ -727,24 +726,24 @@ SessionInfo:
  - SessionNum: 1
    SessionType: Lone_Qualify
    ResultsPositions:
-   - Position: 1
+   - Position: 0
      ClassPosition: 0
      CarIdx: 5
-   - Position: 2
+   - Position: 1
      ClassPosition: 1
      CarIdx: 12
  - SessionNum: 2
    SessionType: Race
    ResultsPositions:
-   - Position: 1
+   - Position: 0
      ClassPosition: 0
      CarIdx: 12
-   - Position: 2
+   - Position: 1
      ClassPosition: 1
      CarIdx: 5
 ";
         let info = parse_min(yaml);
-        // ClassPosition is stored 1-based after the 0-based YAML convert.
+        // Both positions are stored 1-based after the 0-based YAML conversion.
         assert_eq!(info.session_position(1, 5), Some((1, 1)));
         assert_eq!(info.session_position(1, 12), Some((2, 2)));
         assert_eq!(info.session_position(2, 12), Some((1, 1)));
@@ -752,7 +751,7 @@ SessionInfo:
     }
 
     #[test]
-    fn skips_zero_results_position() {
+    fn zero_results_position_is_the_leader() {
         let yaml = "\
 ---
 SessionInfo:
@@ -768,8 +767,8 @@ SessionInfo:
      CarIdx: 5
 ";
         let info = parse_min(yaml);
-        assert_eq!(info.session_position(0, 3), None);
-        assert_eq!(info.session_position(0, 5), Some((1, 1)));
+        assert_eq!(info.session_position(0, 3), Some((1, 1)));
+        assert_eq!(info.session_position(0, 5), Some((2, 1)));
     }
 
     #[test]
