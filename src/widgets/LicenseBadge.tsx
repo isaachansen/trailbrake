@@ -6,12 +6,9 @@
 // stays tidy; the row wraps it in a full-height flex so it centers vertically.
 
 import { LIC } from "./raceColors";
-import { defaultTheme } from "../theme/theme";
+import type { Theme } from "../theme/theme";
 
-const FAMILY = defaultTheme.font.family;
-const MONO = defaultTheme.font.mono;
-
-export function LicenseBadge({ letter, sr }: { letter: string; sr: string }) {
+export function LicenseBadge({ letter, sr, theme }: { letter: string; sr: string; theme: Theme }) {
   const color = LIC[letter] ?? "#9aa0ab";
   // Two decimals to match the iRacing license chip ("4.50", not "4.5"); leave
   // non-numeric values (rare) untouched.
@@ -43,7 +40,7 @@ export function LicenseBadge({ letter, sr }: { letter: string; sr: string }) {
           flex: "none",
           background: color,
           color: "#0a0b0e",
-          fontFamily: FAMILY,
+          fontFamily: theme.font.family,
           fontWeight: 800,
           fontSize: "0.96em",
         }}
@@ -60,7 +57,7 @@ export function LicenseBadge({ letter, sr }: { letter: string; sr: string }) {
             flex: 1,
             background: "#16181f",
             color: "#fff",
-            fontFamily: MONO,
+            fontFamily: theme.font.mono,
             fontWeight: 700,
             fontSize: "0.82em",
             fontVariantNumeric: "tabular-nums",

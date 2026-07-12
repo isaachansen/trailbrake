@@ -1,10 +1,6 @@
-// Shared position chip used by Standings and Relative — full row height,
-// square corners, recessed fill (same container for live + provisional).
+// Shared position chip — full row height, square, recessed fill from Theme.list.
 
-import { defaultTheme } from "../theme/theme";
 import type { Theme } from "../theme/theme";
-
-const MONO = defaultTheme.font.mono;
 
 const TITLE_PROVISIONAL =
   "Provisional — grid, qualify, or car-number order (no live session position yet)";
@@ -13,16 +9,17 @@ export function PosChip({
   pos,
   provisional,
   isPlayer,
-  t,
+  theme,
   /** Row slot height in em — chip stretches to match. */
   rowH,
 }: {
   pos: number;
   provisional: boolean;
   isPlayer: boolean;
-  t: Theme["colors"];
+  theme: Theme;
   rowH: number;
 }) {
+  const t = theme.colors;
   return (
     <span
       title={provisional ? TITLE_PROVISIONAL : undefined}
@@ -37,8 +34,8 @@ export function PosChip({
         padding: "0 0.4em",
         boxSizing: "border-box",
         borderRadius: 0,
-        background: "rgba(0,0,0,0.28)",
-        fontFamily: MONO,
+        background: theme.list.posChipBg,
+        fontFamily: theme.font.mono,
         fontVariantNumeric: "tabular-nums",
         fontWeight: isPlayer ? 800 : 700,
         fontSize: "1em",

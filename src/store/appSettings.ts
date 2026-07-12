@@ -8,6 +8,7 @@ import { useSyncExternalStore } from "react";
 import { loadSettings, saveSettings } from "./persistence";
 import { controls, type VrBackendKind, type VrGlobals } from "./controls";
 import type { UnitSystem } from "../widgets/format";
+import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from "../theme/theme";
 
 /** Widget panel appearance: the flat-glass default, or the Liquid Glass style. */
 export type PanelStyle = "flat" | "liquid";
@@ -31,9 +32,10 @@ export interface AppSettings {
   monitorIndex: number | null;
   /** Display units across all widgets (speed/fuel/temp). */
   units: UnitSystem;
-  /** Accent color for the manager UI (hex, e.g. "#3d8bff"). Drives the `--accent`
-   *  family of CSS variables; persisted so it survives a reopen. */
+  /** Accent color for the manager UI + overlay theme override (hex). */
   accentColor: string;
+  /** Design-system theme pack id (typography, glass, list metrics, …). */
+  themeId: ThemeId;
   /** Fill widgets with synthetic (mock) telemetry while the overlay is shown
    *  (preview/edit) but no sim is feeding it. Real telemetry always takes over. */
   previewMock: boolean;
@@ -58,6 +60,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   monitorIndex: null,
   units: "metric",
   accentColor: "#3d8bff",
+  themeId: DEFAULT_THEME_ID,
   previewMock: true,
   panelStyle: "flat",
   vr: { ...DEFAULT_VR_SETTINGS },
@@ -78,6 +81,8 @@ const listeners = new Set<() => void>();
 let unitsBroadcaster: ((u: UnitSystem) => void) | null = null;
 let previewMockBroadcaster: ((on: boolean) => void) | null = null;
 let panelStyleBroadcaster: ((s: PanelStyle) => void) | null = null;
+let themeIdBroadcaster: ((id: ThemeId) => void) | null = null;
+let accentBroadcaster: ((hex: string) => void) | null = null;
 
 function emit() {
   settings = { ...settings };
@@ -98,6 +103,7 @@ function sanitizeSettings(parsed: unknown): AppSettings {
     monitorIndex: finite(p.monitorIndex) ? p.monitorIndex : null,
     units: p.units === "metric" || p.units === "imperial" ? p.units : DEFAULT_SETTINGS.units,
     accentColor: typeof p.accentColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.accentColor) ? p.accentColor : DEFAULT_SETTINGS.accentColor,
+    themeId: isThemeId(p.themeId) ? p.themeId : DEFAULT_SETTINGS.themeId,
     previewMock: typeof p.previewMock === "boolean" ? p.previewMock : DEFAULT_SETTINGS.previewMock,
     panelStyle: p.panelStyle === "flat" || p.panelStyle === "liquid" ? p.panelStyle : DEFAULT_SETTINGS.panelStyle,
     vr: {
@@ -235,12 +241,49 @@ export const settingsStore = {
     unitsBroadcaster?.(units);
   },
 
-  /** Accent color for the manager UI (hex). Persisted; the manager applies it as
-   *  CSS variables (see `ManagerApp`). */
+  /** Accent color for the manager UI + overlay theme override (hex). Persisted. */
   setAccentColor(hex: string) {
     settings = { ...settings, accentColor: hex };
     emit();
     schedulePersist();
+    accentBroadcaster?.(hex);
+  },
+  setAccentBroadcaster(fn: ((hex: string) => void) | null) {
+    accentBroadcaster = fn;
+  },
+  applyAccentColor(hex: string) {
+    if (settings.accentColor === hex) return;
+    settings = { ...settings, accentColor: hex };
+    emit();
+  },
+
+  /** Design-system theme pack; synced cross-window so the overlay restyles live. */
+  setThemeId(id: ThemeId) {
+    settings = { ...settings, themeId: id };
+    emit();
+    schedulePersist();
+    themeIdBroadcaster?.(id);
+  },
+  setThemeIdBroadcaster(fn: ((id: ThemeId) => void) | null) {
+    themeIdBroadcaster = fn;
+  },
+  applyThemeId(id: ThemeId) {
+    if (settings.themeId === id) return;
+    settings = { ...settings, themeId: id };
+    emit();
+  },
+  async loadTheme() {
+    const raw = await loadSettings();
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as Partial<AppSettings>;
+      if (isThemeId(parsed.themeId)) this.applyThemeId(parsed.themeId);
+      if (typeof parsed.accentColor === "string" && /^#[0-9a-fA-F]{6}$/.test(parsed.accentColor)) {
+        this.applyAccentColor(parsed.accentColor);
+      }
+    } catch {
+      /* ignore */
+    }
   },
 
   // --- cross-window units sync (wired by the sync module in Tauri) ---

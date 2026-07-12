@@ -1,5 +1,5 @@
 // Cross-window sync. The manager and overlay are separate webviews with separate
-// JS stores; this keeps their layout + selection + display units in lockstep so a
+// JS stores; this keeps their layout + selection + display settings in lockstep so a
 // change in the manager updates the on-screen overlay instantly (and vice-versa).
 //
 // Each window tags its broadcasts with a unique nonce and ignores its own echoes,
@@ -11,6 +11,7 @@ import { settingsStore } from "./appSettings";
 import { isTauri } from "./transport";
 import type { UnitSystem } from "../widgets/format";
 import type { PanelStyle } from "./appSettings";
+import type { ThemeId } from "../theme/theme";
 
 const NONCE = Math.random().toString(36).slice(2);
 const EVT_LAYOUT = "overlay://layout-sync";
@@ -18,6 +19,8 @@ const EVT_SELECT = "overlay://select-sync";
 const EVT_UNITS = "overlay://units-sync";
 const EVT_PREVIEW_MOCK = "overlay://preview-mock-sync";
 const EVT_PANEL_STYLE = "overlay://panel-style-sync";
+const EVT_THEME = "overlay://theme-sync";
+const EVT_ACCENT = "overlay://accent-sync";
 /** "Resend your current layout" — broadcast once on startup so a window that
  *  opens after the other has already made edits doesn't miss them (a normal
  *  layout broadcast sent before this window's listener registered is dropped;
@@ -34,13 +37,15 @@ export async function initSync(): Promise<() => void> {
   settingsStore.setUnitsBroadcaster((u) => void emit(EVT_UNITS, { nonce: NONCE, u }));
   settingsStore.setPreviewMockBroadcaster((on) => void emit(EVT_PREVIEW_MOCK, { nonce: NONCE, on }));
   settingsStore.setPanelStyleBroadcaster((s) => void emit(EVT_PANEL_STYLE, { nonce: NONCE, s }));
+  settingsStore.setThemeIdBroadcaster((id) => void emit(EVT_THEME, { nonce: NONCE, id }));
+  settingsStore.setAccentBroadcaster((hex) => void emit(EVT_ACCENT, { nonce: NONCE, hex }));
 
-  // Start this window in sync with the persisted units + preview-mock + panel
-  // style (the overlay window doesn't run settingsStore.init(), so it would
-  // otherwise stay on the defaults).
+  // Start this window in sync with the persisted display settings (the overlay
+  // window doesn't run settingsStore.init(), so it would otherwise stay on defaults).
   await settingsStore.loadUnits();
   await settingsStore.loadPreviewMock();
   await settingsStore.loadPanelStyle();
+  await settingsStore.loadTheme();
 
   const unLayout = await listen<{ nonce: string; blob: string }>(EVT_LAYOUT, (e) => {
     if (e.payload.nonce === NONCE) return;
@@ -66,6 +71,14 @@ export async function initSync(): Promise<() => void> {
     if (e.payload.nonce === NONCE) return;
     settingsStore.applyPanelStyle(e.payload.s);
   });
+  const unTheme = await listen<{ nonce: string; id: ThemeId }>(EVT_THEME, (e) => {
+    if (e.payload.nonce === NONCE) return;
+    settingsStore.applyThemeId(e.payload.id);
+  });
+  const unAccent = await listen<{ nonce: string; hex: string }>(EVT_ACCENT, (e) => {
+    if (e.payload.nonce === NONCE) return;
+    settingsStore.applyAccentColor(e.payload.hex);
+  });
 
   // Ask whichever window is already open to resend its current layout — our
   // own broadcasts before this listener registered above would otherwise be
@@ -78,11 +91,15 @@ export async function initSync(): Promise<() => void> {
     settingsStore.setUnitsBroadcaster(null);
     settingsStore.setPreviewMockBroadcaster(null);
     settingsStore.setPanelStyleBroadcaster(null);
+    settingsStore.setThemeIdBroadcaster(null);
+    settingsStore.setAccentBroadcaster(null);
     unLayout();
     unLayoutRequest();
     unSelect();
     unUnits();
     unPreviewMock();
     unPanelStyle();
+    unTheme();
+    unAccent();
   };
 }

@@ -1,24 +1,13 @@
-// Shared panel surface — ONE paint path for WidgetHost and self-chrome widgets
-// (Relative sections, Spotter card, …). Same alpha in → same look out.
-//
-// Liquid Glass layers: frosted blur + translucent tint + specular rim. The SVG
-// refraction filter is intentionally NOT applied here — it only works reliably
-// on untransformed hosts, and Relative's sections live inside FitContent's
-// `transform: scale(...)`, where refraction also broke sibling backdrop-filters
-// in WebView2. Blur-only keeps every panel visually locked together.
+// Panel chrome wrappers — tokens come from the active Theme pack so flat/liquid
+// surfaces stay in lockstep across WidgetHost and self-painting widgets.
 
 import type { CSSProperties } from "react";
 import type { Theme } from "../theme/theme";
 
+/** @deprecated Prefer theme.glass — kept for SVG filter id stability. */
 export const GLASS_FILTER_ID = "lg-refract";
-export const GLASS_RADIUS = 12;
-export const GLASS_SHADOW =
-  "0 10px 44px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3), " +
-  "inset 0 1px 0 rgba(255,255,255,0.28), inset 0 0 0 1px rgba(255,255,255,0.05), " +
-  "inset 0 -10px 28px rgba(255,255,255,0.02)";
-export const GLASS_BORDER = "1px solid rgba(255,255,255,0.14)";
 
-/** Kept for the gallery / future experiments — not referenced by `glassChrome`. */
+/** Kept for gallery / future refraction experiments — not applied to panels. */
 export function LiquidGlassFilter() {
   return (
     <svg width="0" height="0" aria-hidden style={{ position: "absolute", pointerEvents: "none" }}>
@@ -31,35 +20,37 @@ export function LiquidGlassFilter() {
   );
 }
 
-/** Liquid-glass fill. `alpha` (0..1) is the user's panel opacity setting. */
-export function glassChrome(alpha = 1): CSSProperties {
+/** Liquid-glass fill from theme tokens. `alpha` is the user's panel opacity. */
+export function glassChrome(theme: Theme, alpha = 1): CSSProperties {
   const a = Math.max(0, Math.min(1, alpha));
+  const g = theme.glass;
+  const [r, gch, b] = g.fillRgb;
   return {
     background:
-      `linear-gradient(180deg, rgba(255,255,255,${0.045 * a}), rgba(255,255,255,0) 36%), ` +
-      `linear-gradient(160deg, rgba(255,255,255,${0.022 * a}), rgba(255,255,255,${0.008 * a})), ` +
-      `rgba(13,15,21,${0.72 * a})`,
-    border: GLASS_BORDER,
-    borderRadius: GLASS_RADIUS,
-    boxShadow: GLASS_SHADOW,
-    backdropFilter: "blur(10px) saturate(150%)",
-    WebkitBackdropFilter: "blur(10px) saturate(150%)",
+      `linear-gradient(180deg, rgba(255,255,255,${g.sheenTop * a}), rgba(255,255,255,0) 36%), ` +
+      `linear-gradient(160deg, rgba(255,255,255,${g.sheenDiag * a}), rgba(255,255,255,${g.sheenDiagEnd * a})), ` +
+      `rgba(${r},${gch},${b},${g.fillAlpha * a})`,
+    border: g.border,
+    borderRadius: g.radius,
+    boxShadow: g.shadow,
+    backdropFilter: g.blur,
+    WebkitBackdropFilter: g.blur,
   };
 }
 
-/** Flat or liquid panel surface — identical whether painted by WidgetHost or a
- *  self-chrome widget. Pass the same `alpha` and they match. */
+/** Flat or liquid panel surface — identical for host + self-chrome widgets. */
 export function panelChrome(theme: Theme, glass: boolean, alpha = 1): CSSProperties {
   const a = Math.max(0, Math.min(1, alpha));
   if (glass) {
     return {
-      ...glassChrome(a),
+      ...glassChrome(theme, a),
       position: "relative",
       overflow: "hidden",
     };
   }
+  const [r, g, b] = theme.glass.flatRgb;
   return {
-    background: `rgba(18, 20, 27, ${a})`,
+    background: `rgba(${r}, ${g}, ${b}, ${a})`,
     border: `1px solid ${theme.colors.surfaceBorder}`,
     borderRadius: theme.radius,
     backdropFilter: theme.panelBlur,
@@ -70,19 +61,29 @@ export function panelChrome(theme: Theme, glass: boolean, alpha = 1): CSSPropert
   };
 }
 
-/** Specular "light catch" — place inside the panel (content at zIndex ≥ 1). */
-export function GlassSpecular({ radius = GLASS_RADIUS }: { radius?: number }) {
+/** Specular highlight — reads gradient from the active theme. */
+export function GlassSpecular({ theme, radius }: { theme: Theme; radius?: number }) {
   return (
     <div
       style={{
         position: "absolute",
         inset: 0,
-        borderRadius: radius,
+        borderRadius: radius ?? theme.glass.radius,
         pointerEvents: "none",
         zIndex: 0,
-        background:
-          "radial-gradient(120% 75% at 24% -14%, rgba(255,255,255,0.09), rgba(255,255,255,0.02) 32%, transparent 54%)",
+        background: theme.glass.specular,
       }}
     />
   );
+}
+
+/** Border / shadow tokens for host edit chrome (liquid mode). */
+export function glassBorderOf(theme: Theme): string {
+  return theme.glass.border;
+}
+export function glassShadowOf(theme: Theme): string {
+  return theme.glass.shadow;
+}
+export function glassRadiusOf(theme: Theme): number {
+  return theme.glass.radius;
 }

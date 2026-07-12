@@ -26,7 +26,7 @@ import { StoreProvider } from "../store/storeContext";
 import { useCaps } from "../store/hooks";
 import { ScreenLayerContext } from "../components/screenLayer";
 import { FitContent } from "../components/FitContent";
-import { glassChrome, GlassSpecular, LiquidGlassFilter } from "../components/liquidGlass";
+import { GlassSpecular, LiquidGlassFilter, panelChrome } from "../components/liquidGlass";
 import { previewStoreFor, startPreviewMock } from "../manager/previewStore";
 import { allWidgetDefs, getWidgetDef } from "../widgets/registry";
 import { widgetMeta } from "../manager/widgetMeta";
@@ -109,21 +109,10 @@ function GalleryPanel({
           color: theme.colors.text,
           fontSize: theme.font.sizeBase * widgetScale,
           fontFamily: theme.font.family,
-          ...(transparent
-            ? {}
-            : useGlass
-              ? glassChrome(panelAlpha)
-              : {
-                  background: `rgba(18, 20, 27, ${panelAlpha})`,
-                  border: `1px solid ${theme.colors.surfaceBorder}`,
-                  borderRadius: theme.radius,
-                  boxShadow: theme.panelShadow,
-                  backdropFilter: theme.panelBlur,
-                  WebkitBackdropFilter: theme.panelBlur,
-                }),
+          ...(transparent ? {} : panelChrome(theme, useGlass, panelAlpha)),
         }}
       >
-        {useGlass && <GlassSpecular />}
+        {useGlass && <GlassSpecular theme={theme} />}
         <StoreProvider store={previewStoreFor(def.id)}>
           <ScreenLayerContext.Provider value={{ el: layer, preview: true, fullScreen: false }}>
             <div style={{ position: "relative", zIndex: 1, flex: 1, minHeight: 0 }}>

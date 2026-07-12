@@ -10,6 +10,7 @@ import { layoutStore, useLayout } from "../../store/layout";
 import { SESSION_STATES } from "../../store/sessionState";
 import { Field, Slider, Toggle } from "../ui";
 import { ACCENT_PRESETS } from "../accent";
+import { THEME_OPTIONS } from "../../theme/theme";
 import { ColorWheel } from "../ColorWheel";
 import { SoftwareUpdates } from "./SoftwareUpdates";
 import { BuyMeACoffee } from "../BuyMeACoffee";
@@ -170,6 +171,19 @@ export function SettingsPage() {
                 onClick={() => settingsStore.setUnits(key)}
               >
                 {label}
+              </button>
+            ))}
+          </div>
+        </Field>
+        <Field label="Theme">
+          <div className="state-toggles">
+            {THEME_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                className={`state-chip${settings.themeId === opt.id ? " on" : ""}`}
+                onClick={() => settingsStore.setThemeId(opt.id)}
+              >
+                {opt.name}
               </button>
             ))}
           </div>

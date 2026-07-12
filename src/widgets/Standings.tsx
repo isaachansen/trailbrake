@@ -18,13 +18,8 @@ import { CarIcon, carIconFor, iracingIcon } from "./carIcons";
 import type { CarEntry } from "../store/types";
 import { buildProvisionalPositions, standingPosOf, standingSortKey } from "./provisionalPos";
 import type { BaseWidgetProps, WidgetDefinition } from "./contract";
-import type { Theme } from "../theme/theme";
+import { defaultTheme, type Theme } from "../theme/theme";
 import {
-  DRIVER_COL_GAP,
-  DRIVER_ROW_H,
-  DRIVER_ROW_H_COMPACT,
-  DRIVER_ROW_PAD_L,
-  DRIVER_ROW_PAD_R,
   DriverListTrough,
   DriverRowShell,
   PositionFlash,
@@ -62,31 +57,28 @@ const defaultConfig: StandingsConfig = {
   nameFormat: "full",
 };
 
-/** Row / type metrics — row height/pad locked to shared driver-list constants. */
-function standingsDensity(compact: boolean) {
+/** Row / type metrics — row height/pad from the active theme's list tokens. */
+function standingsDensity(compact: boolean, list: Theme["list"]) {
   return compact
     ? {
-        rowH: DRIVER_ROW_H_COMPACT,
+        rowH: list.rowHCompact,
         rowGapPx: 0,
         font: 0.95,
         carIcon: "1.55em",
-        padL: DRIVER_ROW_PAD_L,
-        padR: DRIVER_ROW_PAD_R,
+        padL: list.padL,
+        padR: list.padR,
       }
     : {
-        rowH: DRIVER_ROW_H,
+        rowH: list.rowH,
         rowGapPx: 0,
         font: 1.08,
         carIcon: "1.7em",
-        padL: DRIVER_ROW_PAD_L,
-        padR: DRIVER_ROW_PAD_R,
+        padL: list.padL,
+        padR: list.padR,
       };
 }
 
 type StandingsDensity = ReturnType<typeof standingsDensity>;
-
-/** Left inset for SOF / class meta and the POS column header — keep them aligned. */
-const META_PAD_L = "0.55em";
 
 /** Average iRating across rated cars — matches iRacing's Strength of Field. */
 function strengthOfField(cars: CarEntry[]): number | null {
@@ -225,13 +217,14 @@ interface StandingsRowProps {
   template: string;
   cols: Col[];
   ta: (a: Col["align"]) => React.CSSProperties["textAlign"];
-  t: Theme["colors"];
+  theme: Theme;
   highlight: HighlightEvent | null;
   onExited: (carIdx: number) => void;
 }
 
 /** One standings row — shared DriverRowShell + dynamic column cells. */
-function StandingsRow({ x, slot, exiting, rowh, template, cols, ta, t, highlight, onExited }: StandingsRowProps) {
+function StandingsRow({ x, slot, exiting, rowh, template, cols, ta, theme, highlight, onExited }: StandingsRowProps) {
+  const t = theme.colors;
   return (
     <DriverRowShell
       slot={slot}
@@ -240,7 +233,7 @@ function StandingsRow({ x, slot, exiting, rowh, template, cols, ta, t, highlight
       exiting={exiting}
       steadyOpacity={x.car.onPitRoad === true && !x.isPlayer ? 0.72 : 1}
       gridTemplateColumns={template}
-      accent={t.accent}
+      theme={theme}
       slideMs={SLIDE_MS}
       onExited={() => onExited(x.car.carIdx)}
       style={{ color: x.isPlayer ? "#fff" : t.textDim }}
@@ -262,7 +255,8 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
   const playerIdx = slow?.playerCarIdx ?? null;
   const t = theme.colors;
   const mono = theme.font.mono;
-  const density = standingsDensity(!!config.compact);
+  const density = standingsDensity(!!config.compact, theme.list);
+  const metaPadL = theme.list.metaPadL;
 
   // Full session roster — everyone in standings, including drivers in other
   // practice entities or still in the garage. Relative filters `inWorld` so only
@@ -368,7 +362,7 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
     cell: (x) => {
       const { pos, provisional } = standingPosOf(x.car, multiclass, provPos, provClassPos);
       if (pos == null) return <span style={{ color: t.textDim2 }}>--</span>;
-      return <PosChip pos={pos} provisional={provisional} isPlayer={x.isPlayer} t={t} rowH={density.rowH} />;
+      return <PosChip pos={pos} provisional={provisional} isPlayer={x.isPlayer} theme={theme} rowH={density.rowH} />;
     },
   });
   if (has.delta)
@@ -418,7 +412,7 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, lineHeight: 1, color: x.isPlayer ? "#fff" : t.text }}>
           {formatDriverName(x.car.driverName, config.nameFormat === "short" ? "short" : "full", `Car ${x.car.carIdx}`)}
         </span>
-        {x.car.onPitRoad === true && <PitBadge color={t.amber} />}
+        {x.car.onPitRoad === true && <PitBadge color={t.amber} theme={theme} />}
       </span>
     ),
   });
@@ -432,7 +426,7 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
         // baseline (which left it visibly high).
         return (
           <span style={{ display: "flex", height: `${density.rowH}em`, alignItems: "center", justifyContent: "flex-start" }}>
-            <LicenseBadge letter={lic.letter} sr={lic.sr} />
+            <LicenseBadge letter={lic.letter} sr={lic.sr} theme={theme} />
           </span>
         );
       },
@@ -495,8 +489,8 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
     });
 
   const template = cols.map((c) => c.w).join(" ");
-  const COLGAP = DRIVER_COL_GAP;
-  const ROW_PAD = driverRowPad();
+  const COLGAP = theme.list.colGap;
+  const ROW_PAD = driverRowPad(theme);
   const ta = (a: Col["align"]): React.CSSProperties["textAlign"] => (a === "r" ? "right" : a === "c" ? "center" : "left");
 
   // Group by class ID (preserving first-seen order) or a single group. We key on
@@ -684,11 +678,11 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
         gridTemplateColumns: template,
         gap: COLGAP,
         alignItems: "center",
-        height: "1.7em",
+        height: theme.list.headerH,
         padding: ROW_PAD,
         boxSizing: "border-box",
-        background: "rgba(0, 0, 0, 0.22)",
-        boxShadow: "inset 0 -1px 0 rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.05)",
+        background: theme.list.headerBg,
+        boxShadow: theme.list.headerShadow,
       }}
     >
       {cols.map((c) => (
@@ -706,10 +700,10 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
             style={{
               fontFamily: theme.font.label,
               color: t.textDim,
-              fontSize: "0.78em",
+              fontSize: theme.list.headerLabelSize,
               fontWeight: 800,
-              letterSpacing: "0.1em",
-              ...(c.id === "pos" ? { paddingLeft: META_PAD_L } : null),
+              letterSpacing: theme.list.headerTracking,
+              ...(c.id === "pos" ? { paddingLeft: metaPadL } : null),
             }}
           >
             {c.head}
@@ -757,7 +751,7 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
             {/* Meta (SOF / class / driver count) sits above the column headers;
                 headers sit directly on top of this group's sunken row trough. */}
             {multiclass && g.name ? (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: `6px ${density.padR} 4px ${META_PAD_L}`, height: "1.35em", boxSizing: "content-box" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: `6px ${density.padR} 4px ${metaPadL}`, height: "1.35em", boxSizing: "content-box" }}>
                 <span style={{ fontFamily: theme.font.label, fontWeight: 800, fontSize: "0.82em", letterSpacing: "0.04em", color: "#0a0b0e", padding: "2px 8px", borderRadius: 4, background: classColorOf(ccol, g.id) }}>{g.name}</span>
                 {showSof && sofByClass.get(g.id ?? null) != null && (
                   <SofValue value={sofByClass.get(g.id ?? null)!} theme={theme} mono={mono} t={t} />
@@ -767,7 +761,7 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
                 </span>
               </div>
             ) : showSofBar ? (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: `5px ${density.padR} 4px ${META_PAD_L}`, height: "1.2em", boxSizing: "content-box" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: `5px ${density.padR} 4px ${metaPadL}`, height: "1.2em", boxSizing: "content-box" }}>
                 <SofValue value={fieldSof} theme={theme} mono={mono} t={t} />
                 <span style={{ fontFamily: theme.font.label, marginLeft: "auto", fontSize: "0.78em", color: t.text, letterSpacing: "0.06em", fontWeight: 800, fontVariantNumeric: "tabular-nums", opacity: 0.92 }}>
                   {shownCount < totalCount ? `${shownCount} OF ${totalCount}` : `${totalCount} CARS`}
@@ -775,7 +769,7 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
               </div>
             ) : null}
             {header}
-            <DriverListTrough slots={boxRows} rowH={ROWH_EM}>
+            <DriverListTrough slots={boxRows} rowH={ROWH_EM} theme={theme}>
               {rows.map((r) => {
                 const x = carDataRef.current.get(r.carIdx);
                 if (!x) return null;
@@ -790,7 +784,7 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
                     template={template}
                     cols={cols}
                     ta={ta}
-                    t={t}
+                    theme={theme}
                     highlight={highlight}
                     onExited={(carIdx) => handleExited(key, carIdx)}
                   />
@@ -810,7 +804,7 @@ function Standings({ theme, config, caps, size, allocatedSize }: BaseWidgetProps
 // 14px base. The data-driven delta/number columns are
 // assumed present (they almost always are) so the floor stays safe.
 function standingsMinWidth(config: StandingsConfig): number {
-  const d = standingsDensity(!!config.compact);
+  const d = standingsDensity(!!config.compact, defaultTheme.list);
   const EM = d.font * 14;
   const colEms = [2.85, 1.8, 2.3]; // pos · delta · number
   if (config.showCarIcon) colEms.push(2.2);
@@ -823,9 +817,7 @@ function standingsMinWidth(config: StandingsConfig): number {
   if (config.showBest) colEms.push(4.4);
   if (config.showTyre) colEms.push(1.8);
   const padEm = parseFloat(d.padL) + parseFloat(d.padR);
-  // Flush to panel edges (no root pad); col gap matches COLGAP in the grid.
-  // Flush to panel edges (no root pad); col gap matches shared DRIVER_COL_GAP.
-  const sumEm = colEms.reduce((a, b) => a + b, 0) + parseFloat(DRIVER_COL_GAP) * (colEms.length - 1) + padEm;
+  const sumEm = colEms.reduce((a, b) => a + b, 0) + parseFloat(defaultTheme.list.colGap) * (colEms.length - 1) + padEm;
   return Math.ceil(sumEm * EM);
 }
 

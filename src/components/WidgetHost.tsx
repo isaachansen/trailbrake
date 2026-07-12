@@ -7,7 +7,7 @@ import { layoutStore, type WidgetInstance } from "../store/layout";
 import { getWidgetDef } from "../widgets/registry";
 import { useSettings } from "../store/appSettings";
 import { FitContent } from "./FitContent";
-import { GLASS_SHADOW, GLASS_BORDER, GlassSpecular, panelChrome } from "./liquidGlass";
+import { glassBorderOf, glassShadowOf, GlassSpecular, panelChrome } from "./liquidGlass";
 import type { Capabilities } from "../store/types";
 import type { SessionStateKey } from "../store/sessionState";
 import type { Theme } from "../theme/theme";
@@ -153,7 +153,6 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
   // and numbers stay fully crisp at any setting. 100% = a solid, readable panel
   // (the glass look comes from lowering it, not from a baked-in translucency).
   const panelAlpha = Math.max(0, Math.min(1, eff.opacity));
-  const surfaceBg = `rgba(18, 20, 27, ${panelAlpha})`;
 
   // Some widgets paint only a screen-level effect (e.g. the Spotter set to
   // edges-only) and want no panel of their own. Outside edit mode we drop all
@@ -266,7 +265,9 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
   const panelSurface = glass
     ? panelChrome(theme, true, panelAlpha)
     : {
-        background: chromeless ? "transparent" : surfaceBg,
+        background: chromeless
+          ? "transparent"
+          : `rgba(${theme.glass.flatRgb[0]}, ${theme.glass.flatRgb[1]}, ${theme.glass.flatRgb[2]}, ${panelAlpha})`,
         backdropFilter: chromeless ? "none" : theme.panelBlur,
         WebkitBackdropFilter: chromeless ? "none" : theme.panelBlur,
         borderRadius: theme.radius,
@@ -274,15 +275,15 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
   const panelBorder = chromeless
     ? "none"
     : glass
-      ? GLASS_BORDER
+      ? glassBorderOf(theme)
       : `1px solid ${theme.colors.surfaceBorder}`;
-  const panelShadow = chromeless ? "none" : glass ? GLASS_SHADOW : theme.panelShadow;
+  const panelShadow = chromeless ? "none" : glass ? glassShadowOf(theme) : theme.panelShadow;
   const editBorder = editing
     ? `1px ${selected ? "solid" : "dashed"} ${selected ? theme.colors.edit : theme.colors.surfaceBorder}`
     : panelBorder;
   const editShadow =
     editing && selected
-      ? `${chromeless ? "none" : glass ? GLASS_SHADOW : theme.panelShadow}, 0 0 0 1px ${theme.colors.edit}`
+      ? `${chromeless ? "none" : glass ? glassShadowOf(theme) : theme.panelShadow}, 0 0 0 1px ${theme.colors.edit}`
       : panelShadow;
   const innerBorder = dualBorder
     ? chromeless
@@ -341,7 +342,7 @@ export function WidgetHost({ instance, editing, selected, theme, caps, sessionSt
             boxShadow: innerShadow,
           }}
         >
-          {glass && <GlassSpecular />}
+          {glass && <GlassSpecular theme={theme} />}
 
           <div style={{ position: "relative", zIndex: 1, flex: 1, minHeight: 0 }}>
           {unsupported ? (

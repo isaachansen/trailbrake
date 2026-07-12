@@ -30,14 +30,13 @@ import type { BaseWidgetProps, InfoFieldConfig, SessionType, WidgetDefinition } 
 import type { Theme } from "../theme/theme";
 import { GlassSpecular, panelChrome } from "../components/liquidGlass";
 import {
-  DRIVER_COL_GAP,
-  DRIVER_ROW_H,
-  DRIVER_ROW_PAD_R,
+  DRIVER_SLIDE_MS,
   DriverListTrough,
   DriverRowShell,
   PositionFlash,
   flashColor,
 } from "./driverList";
+import { defaultTheme } from "../theme/theme";
 
 export interface RelativeConfig {
   /** How many cars ahead of the player to show. */
@@ -153,8 +152,8 @@ const defaultConfig: RelativeConfig = {
   footer: buildFieldDefaults(["last", "best", "fuel"]),
 };
 
-const ROWH = DRIVER_ROW_H; // em — slot height; rows animate their `top` between slots.
-const SLIDE_MS = 180; // position-swap glide — keep under the ~200ms slow tick so rows don't lag live order
+const ROWH = defaultTheme.list.rowH; // em — layout floor @ scale 1; live rows use theme.list via rowH prop
+const SLIDE_MS = DRIVER_SLIDE_MS; // position-swap glide — keep under the ~200ms slow tick so rows don't lag live order
 /** Gap between the disconnected header / main / footer panels (design px). */
 const SECTION_GAP = 8;
 /** InfoBar type size (em) before the user `fieldScale` multiplier. */
@@ -286,7 +285,7 @@ interface RelativeRowProps {
   gap: number;
   inPit: boolean;
   lic: { letter: string; sr: string } | null;
-  t: Theme["colors"];
+  theme: Theme;
   mono: string;
   has: { flag: boolean; car: boolean; lic: boolean; ir: boolean; tyre: boolean; lapTrend: boolean };
   cols: string;
@@ -296,7 +295,8 @@ interface RelativeRowProps {
 }
 
 /** One relative row — shared DriverRowShell + widget-specific columns. */
-function RelativeRow({ car, slot, rowH, exiting, isPlayer, pos, provisional, gap, inPit, lic, t, mono, has, cols, nameFormat, highlight, onExited }: RelativeRowProps) {
+function RelativeRow({ car, slot, rowH, exiting, isPlayer, pos, provisional, gap, inPit, lic, theme, mono, has, cols, nameFormat, highlight, onExited }: RelativeRowProps) {
+  const t = theme.colors;
   return (
     <DriverRowShell
       slot={slot}
@@ -305,7 +305,7 @@ function RelativeRow({ car, slot, rowH, exiting, isPlayer, pos, provisional, gap
       exiting={exiting}
       steadyOpacity={inPit && !isPlayer ? 0.7 : 1}
       gridTemplateColumns={cols}
-      accent={t.accent}
+      theme={theme}
       slideMs={SLIDE_MS}
       onExited={() => onExited(car.carIdx)}
       style={{ color: isPlayer ? "#fff" : t.textDim }}
@@ -314,7 +314,7 @@ function RelativeRow({ car, slot, rowH, exiting, isPlayer, pos, provisional, gap
       {pos == null ? (
         <span style={{ color: t.textDim2 }}>--</span>
       ) : (
-        <PosChip pos={pos} provisional={provisional} isPlayer={isPlayer} t={t} rowH={rowH} />
+        <PosChip pos={pos} provisional={provisional} isPlayer={isPlayer} theme={theme} rowH={rowH} />
       )}
       {has.car && (
         <span style={{ justifySelf: "center", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -333,11 +333,11 @@ function RelativeRow({ car, slot, rowH, exiting, isPlayer, pos, provisional, gap
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, lineHeight: 1, color: isPlayer ? "#fff" : t.text }}>
           {formatDriverName(car.driverName, nameFormat, `Car ${car.carIdx}`)}
         </span>
-        {inPit && <PitBadge color={t.amber} />}
+        {inPit && <PitBadge color={t.amber} theme={theme} />}
       </span>
       {has.lic && (
         <span style={{ justifySelf: "start", alignSelf: "stretch", display: "flex", alignItems: "center" }}>
-          {lic && <LicenseBadge letter={lic.letter} sr={lic.sr} />}
+          {lic && <LicenseBadge letter={lic.letter} sr={lic.sr} theme={theme} />}
         </span>
       )}
       {has.ir && (
@@ -403,7 +403,7 @@ function Relative({ theme, config, panelOpacity = 1 }: BaseWidgetProps<RelativeC
   const footerChips = visibleChips(config.footer, slowForChips, curSession, units);
   const fieldScale = config.fieldScale > 0 ? config.fieldScale : 1;
   const rowScale = config.rowScale > 0 ? config.rowScale : 1;
-  const rowH = ROWH * rowScale;
+  const rowH = theme.list.rowH * rowScale;
 
   // Sort by relative gap (ahead → behind), keeping only cars with a known gap.
   // Drop cars that aren't in the world (`inWorld === false`): during practice the
@@ -575,7 +575,7 @@ function Relative({ theme, config, panelOpacity = 1 }: BaseWidgetProps<RelativeC
     >
       {headerChips.length > 0 && (
         <div style={{ ...chrome, flex: "none", padding: theme.widgetPad, boxSizing: "border-box" }}>
-          {glass && <GlassSpecular />}
+          {glass && <GlassSpecular theme={theme} />}
           <div style={{ position: "relative", zIndex: 1 }}>
             <InfoBar chips={headerChips} color={t.text} dim={t.textDim} mono={mono} scale={fieldScale} />
           </div>
@@ -599,12 +599,12 @@ function Relative({ theme, config, panelOpacity = 1 }: BaseWidgetProps<RelativeC
           overflow: "hidden",
         }}
       >
-        {glass && <GlassSpecular />}
+        {glass && <GlassSpecular theme={theme} />}
         <div style={{ position: "relative", zIndex: 1, flex: "0 0 auto" }}>
           {ordered.length === 0 ? (
             <div style={{ textAlign: "center", color: t.textDim, fontSize: "0.82em", padding: theme.widgetPad }}>No field data</div>
           ) : (
-            <DriverListTrough slots={slotCount} rowH={rowH}>
+            <DriverListTrough slots={slotCount} rowH={rowH} theme={theme}>
               {rows.map((r) => {
                 const car = carDataRef.current.get(r.carIdx);
                 if (!car) return null;
@@ -627,7 +627,7 @@ function Relative({ theme, config, panelOpacity = 1 }: BaseWidgetProps<RelativeC
                     gap={gap}
                     inPit={inPit}
                     lic={lic}
-                    t={t}
+                    theme={theme}
                     mono={mono}
                     has={has}
                     cols={cols}
@@ -644,7 +644,7 @@ function Relative({ theme, config, panelOpacity = 1 }: BaseWidgetProps<RelativeC
 
       {footerChips.length > 0 && (
         <div style={{ ...chrome, flex: "none", padding: theme.widgetPad, boxSizing: "border-box" }}>
-          {glass && <GlassSpecular />}
+          {glass && <GlassSpecular theme={theme} />}
           <div style={{ position: "relative", zIndex: 1 }}>
             <InfoBar chips={footerChips} color={t.text} dim={t.textDim} mono={mono} scale={fieldScale} />
           </div>
@@ -668,7 +668,7 @@ function relativeMinWidth(config: RelativeConfig): number {
   if (config.showIrating) colEms.push(2.7);
   if (config.showTyre) colEms.push(2);
   colEms.push(3.1); // gap
-  const sumEm = colEms.reduce((a, b) => a + b, 0) + parseFloat(DRIVER_COL_GAP) * (colEms.length - 1) + parseFloat(DRIVER_ROW_PAD_R);
+  const sumEm = colEms.reduce((a, b) => a + b, 0) + parseFloat(defaultTheme.list.colGap) * (colEms.length - 1) + parseFloat(defaultTheme.list.padR);
   return Math.ceil(sumEm * EM);
 }
 

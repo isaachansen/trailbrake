@@ -6,11 +6,9 @@
 // text nested smaller. Kept a hair under the license chip so it reads as a
 // name annotation.
 
-import { defaultTheme } from "../theme/theme";
+import type { Theme } from "../theme/theme";
 
-const LABEL = defaultTheme.font.label;
-
-export function PitBadge({ color }: { color: string }) {
+export function PitBadge({ color, theme }: { color: string; theme: Theme }) {
   return (
     <span
       style={{
@@ -29,7 +27,7 @@ export function PitBadge({ color }: { color: string }) {
       <span
         style={{
           display: "block",
-          fontFamily: LABEL,
+          fontFamily: theme.font.label,
           fontSize: "0.72em",
           fontWeight: 800,
           letterSpacing: "0.07em",

@@ -1,33 +1,22 @@
-// Shared driver-list building blocks for Relative + Standings — same trough,
-// slot plates, dividers, row metrics, and animated row shell so both widgets
-// lock to one visual language. Column content stays per-widget.
+// Shared driver-list building blocks — metrics from Theme.list so packs restyle
+// Relative, Standings, and future timing-tower widgets together.
 
 import { useEffect, useState, type CSSProperties, type ReactNode, type TransitionEvent } from "react";
 import { hexToRgba } from "./format";
 import type { Theme } from "../theme/theme";
-
-/** Default (comfortable) row slot height in em. */
-export const DRIVER_ROW_H = 2.55;
-/** Compact row slot height in em (Standings compact mode). */
-export const DRIVER_ROW_H_COMPACT = 2.15;
-/** Flush left — position chip sits on the panel edge. */
-export const DRIVER_ROW_PAD_L = "0";
-/** Trailing inset so the last column isn't glued to the edge. */
-export const DRIVER_ROW_PAD_R = "1.2em";
-/** Column gap inside a driver row. */
-export const DRIVER_COL_GAP = "0.45em";
 
 export const DRIVER_SLIDE_MS = 180;
 export const DRIVER_ENTER_MS = 240;
 export const DRIVER_EXIT_MS = 240;
 export const DRIVER_FLASH_MS = 900;
 
-export function driverRowPad(): string {
-  return `0 ${DRIVER_ROW_PAD_R} 0 ${DRIVER_ROW_PAD_L}`;
+export function driverRowPad(theme: Theme): string {
+  const L = theme.list;
+  return `0 ${L.padR} 0 ${L.padL}`;
 }
 
 /** Sunken groove between every slot (including empty ones). */
-export function SlotDivider({ topEm }: { topEm: number }) {
+export function SlotDivider({ topEm, theme }: { topEm: number; theme: Theme }) {
   return (
     <div
       aria-hidden
@@ -39,15 +28,15 @@ export function SlotDivider({ topEm }: { topEm: number }) {
         height: 0,
         zIndex: 3,
         pointerEvents: "none",
-        borderTop: "1px solid rgba(0, 0, 0, 0.72)",
-        boxShadow: "0 1px 0 rgba(255, 255, 255, 0.07)",
+        borderTop: theme.list.divider,
+        boxShadow: theme.list.dividerGlow,
       }}
     />
   );
 }
 
 /** Recessed plate under each slot so vacant seats still read as a trough. */
-export function EmptySlotPlate({ slot, rowH }: { slot: number; rowH: number }) {
+export function EmptySlotPlate({ slot, rowH, theme }: { slot: number; rowH: number; theme: Theme }) {
   return (
     <div
       aria-hidden
@@ -58,8 +47,8 @@ export function EmptySlotPlate({ slot, rowH }: { slot: number; rowH: number }) {
         top: `${slot * rowH}em`,
         height: `${rowH}em`,
         zIndex: 0,
-        background: "rgba(0, 0, 0, 0.28)",
-        boxShadow: "inset 0 1px 0 rgba(255, 255, 255, 0.035), inset 0 -1px 0 rgba(0, 0, 0, 0.35)",
+        background: theme.list.plate,
+        boxShadow: theme.list.plateShadow,
       }}
     />
   );
@@ -69,10 +58,12 @@ export function EmptySlotPlate({ slot, rowH }: { slot: number; rowH: number }) {
 export function DriverListTrough({
   slots,
   rowH,
+  theme,
   children,
 }: {
   slots: number;
   rowH: number;
+  theme: Theme;
   children: ReactNode;
 }) {
   return (
@@ -80,15 +71,15 @@ export function DriverListTrough({
       style={{
         position: "relative",
         height: slots ? `${slots * rowH}em` : 0,
-        background: "rgba(0, 0, 0, 0.2)",
-        boxShadow: "inset 0 2px 6px rgba(0, 0, 0, 0.45)",
+        background: theme.list.trough,
+        boxShadow: theme.list.troughShadow,
       }}
     >
       {Array.from({ length: slots }, (_, i) => (
-        <EmptySlotPlate key={`slot-${i}`} slot={i} rowH={rowH} />
+        <EmptySlotPlate key={`slot-${i}`} slot={i} rowH={rowH} theme={theme} />
       ))}
       {Array.from({ length: Math.max(0, slots - 1) }, (_, i) => (
-        <SlotDivider key={`div-${i}`} topEm={(i + 1) * rowH} />
+        <SlotDivider key={`div-${i}`} topEm={(i + 1) * rowH} theme={theme} />
       ))}
       {children}
     </div>
@@ -123,19 +114,18 @@ export interface DriverRowShellProps {
   rowH: number;
   isPlayer: boolean;
   exiting: boolean;
-  /** Steady opacity when not entering/exiting (e.g. pit dim). */
   steadyOpacity?: number;
   gridTemplateColumns: string;
+  theme: Theme;
   colGap?: string;
   pad?: string;
-  accent: string;
   slideMs?: number;
   children: ReactNode;
   onExited: () => void;
   style?: CSSProperties;
 }
 
-/** Absolute-positioned animated row frame — player accent, slide + enter/exit. */
+/** Absolute-positioned animated row frame — player accent from theme. */
 export function DriverRowShell({
   slot,
   rowH,
@@ -143,9 +133,9 @@ export function DriverRowShell({
   exiting,
   steadyOpacity = 1,
   gridTemplateColumns,
-  colGap = DRIVER_COL_GAP,
-  pad = driverRowPad(),
-  accent,
+  theme,
+  colGap,
+  pad,
   slideMs = DRIVER_SLIDE_MS,
   children,
   onExited,
@@ -157,6 +147,7 @@ export function DriverRowShell({
     return () => cancelAnimationFrame(raf);
   }, []);
 
+  const L = theme.list;
   const opacity = exiting || !entered ? 0 : steadyOpacity;
 
   const onTransitionEnd = (e: TransitionEvent<HTMLDivElement>) => {
@@ -176,11 +167,11 @@ export function DriverRowShell({
         display: "grid",
         gridTemplateColumns,
         alignItems: "center",
-        gap: colGap,
-        padding: pad,
+        gap: colGap ?? L.colGap,
+        padding: pad ?? driverRowPad(theme),
         borderRadius: 0,
         boxSizing: "border-box",
-        background: isPlayer ? hexToRgba(accent, 0.32) : "transparent",
+        background: isPlayer ? hexToRgba(theme.colors.accent, L.playerFillAlpha) : "transparent",
         color: isPlayer ? "#fff" : undefined,
         fontWeight: isPlayer ? 800 : 500,
         opacity,
@@ -193,7 +184,6 @@ export function DriverRowShell({
   );
 }
 
-/** Shared gain/loss flash color helper. */
 export function flashColor(kind: "gain" | "loss", t: Theme["colors"]): string {
   return hexToRgba(kind === "gain" ? t.gain : t.loss, 0.32);
 }

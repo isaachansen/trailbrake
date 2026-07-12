@@ -277,7 +277,7 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
             // WidgetHost's flat/Liquid Glass choice via the same shared helper,
             // since the host never paints chrome for this widget.
             ...(glass
-              ? glassChrome(1)
+              ? glassChrome(theme, 1)
               : {
                   background: t.surface,
                   border: `1px solid ${t.surfaceBorder}`,
@@ -291,7 +291,7 @@ function Spotter({ theme, config }: BaseWidgetProps<SpotterConfig>) {
             transition: "opacity 0.16s ease, transform 0.16s ease",
           }}
         >
-          {glass && <GlassSpecular />}
+          {glass && <GlassSpecular theme={theme} />}
           <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
             <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: theme.space.lg, minHeight: 0 }}>
               <div style={barBase}>

@@ -5,20 +5,21 @@
 // instance's config / opacity / scale so customization shows in real time.
 
 import { useState } from "react";
-import { defaultTheme } from "../theme/theme";
+import { useResolvedTheme } from "../theme/useResolvedTheme";
 import { StoreProvider } from "../store/storeContext";
 import { useCaps } from "../store/hooks";
 import { useSettings } from "../store/appSettings";
 import { ScreenLayerContext } from "../components/screenLayer";
 import { FitContent } from "../components/FitContent";
-import { glassChrome, GlassSpecular } from "../components/liquidGlass";
+import { glassChrome, GlassSpecular, panelChrome } from "../components/liquidGlass";
 import { previewStoreFor } from "./previewStore";
 import type { WidgetDefinition } from "../widgets/contract";
 
 function PreviewInner({ def, config, panelOpacity }: { def: WidgetDefinition; config: Record<string, unknown>; panelOpacity: number }) {
-  const caps = useCaps(); // reads the preview store via the provider below
+  const caps = useCaps();
+  const theme = useResolvedTheme();
   const Comp = def.Component;
-  return <FitContent>{(size) => <Comp theme={defaultTheme} config={config} caps={caps} size={size} panelOpacity={panelOpacity} />}</FitContent>;
+  return <FitContent>{(size) => <Comp theme={theme} config={config} caps={caps} size={size} panelOpacity={panelOpacity} />}</FitContent>;
 }
 
 interface Props {
@@ -34,7 +35,7 @@ interface Props {
 }
 
 export function WidgetPreview({ def, maxW, maxH, config, opacity = 1, widgetScale = 1 }: Props) {
-  const theme = defaultTheme;
+  const theme = useResolvedTheme();
   const { w, h } = def.defaultSize;
   const fit = Math.min(maxW / w, maxH / h, 1);
   const cfg = config ?? (def.defaultConfig as Record<string, unknown>);
@@ -81,18 +82,11 @@ export function WidgetPreview({ def, maxW, maxH, config, opacity = 1, widgetScal
           ...(transparent
             ? {}
             : glass
-              ? glassChrome(panelAlpha)
-              : {
-                  background: `rgba(18, 20, 27, ${panelAlpha})`,
-                  border: `1px solid ${theme.colors.surfaceBorder}`,
-                  borderRadius: theme.radius,
-                  boxShadow: theme.panelShadow,
-                  backdropFilter: theme.panelBlur,
-                  WebkitBackdropFilter: theme.panelBlur,
-                }),
+              ? glassChrome(theme, panelAlpha)
+              : panelChrome(theme, false, panelAlpha)),
         }}
       >
-        {glass && <GlassSpecular />}
+        {glass && <GlassSpecular theme={theme} />}
         <StoreProvider store={previewStoreFor(def.id)}>
           <ScreenLayerContext.Provider value={{ el: layer, preview: true, fullScreen: true }}>
             <div className="wp-body" style={{ position: "relative", zIndex: 1 }}>

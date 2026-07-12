@@ -4,7 +4,7 @@
 // component only paints whatever the layout store holds.
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { defaultTheme } from "./theme/theme";
+import { useResolvedTheme } from "./theme/useResolvedTheme";
 import { initTransport, isTauri } from "./store/transport";
 import { editModeStore } from "./store/editMode";
 import { startHitRegionReporting } from "./store/hitRegions";
@@ -25,7 +25,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { PerfHud } from "./perf/PerfHud";
 
 export default function OverlayApp() {
-  const theme = defaultTheme;
+  const theme = useResolvedTheme();
   const editing = useSyncExternalStore(editModeStore.subscribe, editModeStore.get);
   const layout = useLayout();
   const caps = useCaps();
